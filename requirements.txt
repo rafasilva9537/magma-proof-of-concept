@@ -1,0 +1,16 @@
+openai>=1.50
+pydantic>=2.8
+python-dotenv>=1.0
+numpy>=1.26
+networkx>=3.3
+faiss-cpu>=1.8
+rank-bm25>=0.2.2
+torch>=2.3
+transformers>=4.51
+sentence-transformers>=3.0
+dateparser>=1.2
+tiktoken>=0.7
+scipy>=1.13
+tqdm>=4.66
+llama-index-core>=0.11
+pytest>=8.2

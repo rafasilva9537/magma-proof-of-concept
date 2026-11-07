@@ -6,7 +6,7 @@
 > **Status:** análise concluída. **Decisão principal:** reimplementar o MAGMA do zero, fiel ao artigo (§5).
 > **Decididas (todas):** D1 (benchmarks por requisito; modos `sample` e `report`), D2 (router determinístico), D3 (GLM 5.3 Flash + juízes de outra família), D4 (baselines), D5 (inglês), D6 (sem framework de LLM), D7 (FAISS exato), D8 (Qwen3-Embedding-0.6B), D9 (perfil `narrative`). Premissa da avaliação: comparação controlada entre as implementações do projeto; o artigo é referência (D1).
 > **A verificar na implementação:** se o canal temporal do RRF usa só o τ ou também as `dates_mentioned` (uma claim que cita outro momento herda o τ do evento de fala); se o LongMemEval-KU entra no RF3 (D1).
-> **Próximo passo:** planejar a implementação em commits → M0 (§10).
+> **Próximo passo:** implementar o commit 1 do plano (§10.2), em M0.
 > **Regra da §9:** toda decisão registra recomendação, justificativa, alternativas comparadas e por que cada uma foi descartada (material direto para o artigo). Sem tom de roteiro de apresentação.
 > **Regra de escopo (PoC):** implementar tudo o que o artigo descreve e tudo o que a extensão exige; só otimizações e extras vão para a §12.
 >
@@ -28,6 +28,7 @@
 - **Baixa complexidade:** implementar só o necessário para os requisitos (§2); o resto vira trabalhos futuros.
 - **Reprodutibilidade:** `temperature=0`, `seed` fixo, cache de chamadas LLM em disco, hiperparâmetros num único arquivo.
 - **Modelos remotos atuais** via endpoint OpenAI-compatível (D3); o mesmo cliente aceita endpoint local.
+- **Console interativo em cada branch** (§6.2, §7.5): conversar com a memória e com os personagens, com o rastreamento da recuperação visível. Serve de demonstração e de teste de integração; as métricas continuam vindo do runner por replay (§8).
 - **Avaliação:** comparação controlada entre as implementações do projeto, todas com o mesmo LLM; do artigo comparam-se tendências, não números absolutos (D1).
 - **Evidência principal vem de benchmarks públicos e estabelecidos** (validados e citados na literatura), não de dados criados pelo próprio projeto. Conjunto próprio só como diagnóstico complementar (D1).
 - **LoCoMo/LongMemEval** não têm narrativa multiagente, segredos nem mentiras; servem para fidelidade da Branch A e para a retenção (H2), não para os RFs narrativos.
@@ -170,7 +171,7 @@ Referência: Jiang, D.; Li, Y.; Li, G.; Li, B. *MAGMA: A Multi-Graph based Agent
 | Sarcasmo, boatos, promessas, ToM de 2ª ordem, decaimento, hipotéticos, vínculos sociais, autoridade | **CORTAR** → trabalhos futuros | Cada um é um projeto à parte |
 | Lorebook / Seed Graph | **MÍNIMO** | Só um JSON de cenário (personagens, segredos, fatos iniciais com `visible_to`) |
 | Neo4j / Memgraph / Cypher | **CORTAR** | Infra extra; o artigo (§3.5) admite backend em memória. NetworkX + índice vetorial em memória: zero infra, reprodutível, mesmo backend nas duas branches (variável controlada) |
-| FastAPI / .NET | **CORTAR** | Não precisa de servidor: CLI + scripts de benchmark |
+| FastAPI / .NET | **CORTAR** | Não precisa de servidor: consoles de terminal (§6.2, §7.5) + scripts de benchmark |
 | LangChain / LangGraph / PydanticAI no núcleo | **CORTAR** | Abstraem justamente o que é a contribuição (roteamento, recuperação, consolidação, prompts) e atrapalham a medição de tokens/latência (D6) |
 | LlamaIndex (ou LangChain) | **SÓ NO BASELINE C2** | É o "RAG de terceiros" exigido; isolado em `baselines/naive_rag.py` |
 | LLMs proprietários antigos (GPT-4o, Claude 3.5, Gemini 1.5) | **SUBSTITUIR** | LLM atual via endpoint OpenAI-compatível (D3) |
@@ -213,6 +214,15 @@ Alvo: `FredJiang0324/MAGMA` @ commit `467cb70` (~14k linhas Python). Caminhos ab
 | Prompt do juiz C.3 (do artigo, não o código) | Reescrever **sem** atalho de categoria |
 | `memory/temporal_parser.py` (regex + timedelta, específico do LoCoMo) | Substituir por `dateparser` (determinístico, justificável) |
 | Resto (answer_formatter, best_of_n, nós episode/session/narrative, script do LongMemEval, A-MEM em `utils/memory_layer.py`) | **Descartar** |
+
+### 4.4 Pontos de entrada
+- **`main.py` não executa desde o commit inicial.** A classe `TRGSystem` (modos `build`, `query` e `test`) foi escrita para uma API que o resto do código não tem:
+  - os construtores recebem argumentos que não existem: `MemoryBuilder(trg_memory=…, model=…)` (`main.py:58`; o real recebe `cache_dir, llm_model`, `memory/memory_builder.py:33`), `QueryEngine(trg=…, model=…)` (`main.py:64`; o real recebe `trg_memory, node_index`, `memory/query_engine.py:30`), `TestHarness(trg=…, …)` (`main.py:71`; `memory/test_harness.py:32`) e `Evaluator(model=…)` (`main.py:77`; `memory/evaluator.py:31`);
+  - chama métodos que não existem: `format_context`, `run_tests`, `evaluate_results`, `save_to_file` e `load_from_file` (os reais são `save`/`load`, `memory/trg_memory.py:916` e `:934`).
+- **Nenhum arquivo importa `TRGSystem`**, e o README só documenta os scripts de benchmark.
+- **As entradas que funcionam são os scripts de benchmark** (`test_fixed_memory.py:335` e `test_longmemeval_chunked.py`), que montam os componentes à mão (`test_fixed_memory.py:448-498`).
+- **Não há interface interativa:** nenhum ponto do código lê entrada do usuário.
+- → Este projeto expõe a memória por um console em cada branch (§6.2, §7.5), além do runner.
 
 ---
 
@@ -263,6 +273,7 @@ magma/
   retrieve.py    # Stage 2 RRF (Eq.4), Stage 3 beam search (Alg.1, Eq.5-6), Stage 4 linearização (Eq.7) + budgeting
   qa.py          # prompt C.2 com instrução dinâmica gerada pelo router
   memory.py      # fachada: MagmaMemory.add_turn() / consolidate() / query()
+  cli.py         # console (python -m magma): chat, ingest, ask; /why imprime o rastreamento da última consulta
 bench/           # harness, métricas, juiz C.3, estatística (compartilhado com a Branch B)
 baselines/       # full_context.py, naive_rag.py
 tests/           # testes unitários de RRF, beam search e linearização com grafo de brinquedo
@@ -273,6 +284,12 @@ tests/           # testes unitários de RRF, beam search e linearização com gr
 - **`consolidate()`** — Slow Path (Alg. 3): para cada id da fila → prompt C.1 (entidades, tópico, fatos, datas, resumo) → cria/une `EntityNode` + arestas `ENT`; resolve `dates_mentioned` via `temporal.py` e grava em `A_i`; vizinhança 2-hop → LLM infere arestas `CAUSAL` com confiança ≥ δ.
   - Roda como **thread de fundo real** (fiel ao artigo), mas o benchmark chama `consolidate(drain=True)` antes de cada sonda → resultado determinístico.
 - **`query(q)`** — Stage 1→4 (Alg. 1): router → RRF(vec, key, time) top-K âncoras → beam search com `score_v = score_u·γ + exp(λ1·w_Tqᵀ·1_r + λ2·sim)` → ordenação (WHEN: τ; WHY: sort topológico em `CAUSAL`; ENTITY: score) → `<t:τ> conteúdo <ref:id>` → nós de baixa saliência viram `"...N intermediate events..."` até caber no orçamento de tokens → prompt C.2.
+  - Além do contexto, `query` devolve um **rastreamento**: intenção e janela do router, âncoras com a posição em cada canal do RRF, caminhos do beam com tipo de aresta e pontuação, nós podados pelo budgeting e tokens. O console imprime esse rastreamento e o runner o grava junto de cada resposta, o que permite estudos de caso no estilo do Ap. E do artigo.
+- **Console (`cli.py`)** — mesma fachada, sem lógica própria de memória:
+  - `chat`: cada fala do usuário passa por `add_turn`; a resposta vem de `query` + C.2 e também é ingerida como turno do assistente. A consolidação roda em segundo plano, como no artigo.
+  - `ingest <arquivo>` (transcrição em turnos `speaker`, `text`, `time`) e `ask "<pergunta>"` sobre um grafo salvo.
+  - Comandos: `/why` (rastreamento da última consulta), `/stats` (nós e arestas por camada, fila do slow path, tokens), `/date` (data simulada da sessão, para perguntas temporais), `/save` e `/load`.
+  - `--script <arquivo>` lê os comandos de um arquivo em vez do teclado. Com o cache do `llm.py`, a mesma sessão se repete sem custo; é a base do teste de integração e de demonstrações reproduzíveis.
 
 ### 6.4 Decisões onde o artigo é omisso
 | Lacuna | Escolha | Justificativa |
@@ -355,8 +372,20 @@ Os tipos abaixo são declarados em `narrative/schema.py`, que estende o perfil `
 
 ### 7.5 Agentes
 - `narrative/agents.py`: prompt de persona (identidade, relações, personalidade, objetivos, segredos) + memória com escopo + últimos K turnos visíveis → resposta no formato `*ação* "fala"`.
-- **Orquestrador ao vivo faz parte do PoC:** é o "sistema de narrativa multiagente" do objetivo do projeto (agentes conversando entre si e com o usuário). Laço simples de turnos: escolhe quem fala, monta o prompt com a memória do viewer, gera a resposta e a ingere.
+- **O prompt de persona também responde às sondas** (§8.5): a DCR mede se o mentiroso mantém a versão que contou, o que exige responder no papel dele. Por isso o prompt (`agents.py`) e o laço ao vivo (`orchestrator.py`) são commits separados.
+- **Orquestrador ao vivo (`narrative/orchestrator.py`) faz parte do PoC:** é o "sistema de narrativa multiagente" do objetivo do projeto (agentes conversando entre si e com o usuário). Laço simples de turnos: escolhe quem fala, monta o prompt com a memória do viewer, gera a resposta e a ingere.
 - **As métricas usam transcrições roteirizadas (replay)** → determinístico e barato (§8). O modo ao vivo serve de demonstração e de teste de integração.
+- **Console narrativo (`narrative/cli.py`, `python -m narrative play <cenario.json>`)** — o modo ao vivo com o usuário dentro da cena. Lê o mesmo JSON da §8.3 e usa o orquestrador; não tem lógica própria de memória.
+  - `--until <t>` reproduz os turnos do cenário até `t` antes de abrir o console (ex.: o Épsilon-4 até o turno 20, já com o segredo e a mentira no grafo).
+  - O usuário entra como um personagem (`--as B`) ou como narrador. A fala segue o formato `*ação* "fala"` dos agentes e entra pelo mesmo fast path, com `present` da cena atual.
+  - Comandos:
+    - `/scene A,B,C`: quem está presente (define `visible_to` dos próximos turnos);
+    - `/narrate <texto>`: fato do mundo, sem claim, visível para quem está na cena;
+    - `/auto <n>`: os agentes falam `n` turnos entre si;
+    - `/ask <agente> "<pergunta>"`: entrevista um personagem com a memória dele, sem ingerir a resposta (como as entrevistas de Park et al., 2023);
+    - `/memory <agente>`: o que o agente presenciou e o que foi dito a ele, com o status de cada claim visto por ele;
+    - `/why`, `/save` e `--script`, como no console da Branch A.
+  - Para a demonstração e o teste de integração, a mesma pergunta feita a dois viewers deve dar respostas diferentes, de acordo com o que cada um presenciou (RF1–RF3).
 
 ### 7.6 Ablações (em tempo de consulta, sobre o mesmo grafo)
 - `B − visibilidade` (ignora `visible_to`) → isola RF2.
@@ -685,14 +714,68 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
 
 | # | Branch | Entrega |
 |---|---|---|
-| M0 | `main` | `.gitignore`, `pyproject`/`requirements`, acesso aos modelos remotos (D3) configurado, `llm.py` com cache e contadores |
-| M1 | `magma-original` | Núcleo fiel (§6): graph, index, temporal, router, fast/slow path, RRF, beam, linearização, C.1/C.2/C.3 + testes unitários |
+| M0 | `main` | `.gitignore`, `requirements.txt`, acesso aos modelos remotos (D3) configurado, `llm.py` com cache e contadores |
+| M1 | `magma-original` | Núcleo fiel (§6): graph, index, temporal, router, fast/slow path, RRF, beam, linearização, C.1/C.2/C.3 + testes unitários + console |
 | M2 | `magma-original` | LoCoMo (`sample`, depois `report`) + ablações das Tabs. 4 e 5 + métricas da Tab. 3; tag `v-original` |
 | M3 | `magma-narrative` | Adaptadores (LoCoMo, FANToM, FactConsolidation) + cenário diagnóstico + gabarito + sondas + runner incremental com os modos `sample` e `report` |
-| M4 | `magma-narrative` | `narrative/`: claims, `visible_to`, contradição/status, recuperação por viewer, prompts de agente, orquestrador ao vivo |
+| M4 | `magma-narrative` | `narrative/`: claims, `visible_to`, contradição/status, recuperação por viewer, prompts de agente, orquestrador ao vivo, console narrativo |
 | M5 | `magma-narrative` | Baselines Full Context + Naive RAG |
 | M6 | `magma-narrative` | Métricas, juízes (principal + segundo juiz, com concordância), estatística, tabelas/gráficos |
 | M7 | opcional | LongMemEval-KU (*oracle*), se aprovado na implementação (D1) + análise de sensibilidade do embedding + itens do §12 |
+
+### 10.1 Branches
+- **`main`:** documentação e M0 (infraestrutura comum).
+- **`magma-original`:** criada a partir de `main`; recebe M1 e M2. A tag `v-original` marca a Branch A validada.
+- **`magma-narrative`:** criada a partir de `v-original`. Só **acrescenta** (`narrative/`, adaptadores, baselines, métricas) e nunca edita `magma/`. Correções no núcleo são feitas em `magma-original` e trazidas por merge, o que mantém a Branch A intacta dentro da B (variável controlada, §7).
+- **Ganchos genéricos no núcleo:** o núcleo da Branch A já nasce agnóstico a tipo (D9): campo `visible_to` no nó, facetas (`anchor=True`) agregadas no RRF e efeitos epistêmicos no registro. No perfil `magma` todos são inoperantes (`visible_to = {"*"}`, nenhuma faceta, nenhum efeito), então o comportamento é o do artigo.
+- **Cada commit traz os seus testes** e deixa a suíte passando.
+
+### 10.2 Plano de commits
+| # | Milestone | Mensagem | Escopo | Referência |
+|---|---|---|---|---|
+| 1 | M0 | `Add project scaffolding` | `requirements.txt`, `pytest.ini`, pacotes `magma/`, `bench/`, `baselines/`, `tests/`, `.env.example` | §6.2 |
+| 2 | M0 | `Add config module` | `config.py`: Tab. 6 + escolhas da §6.4 + flags de ablação | §1.5, §6.4 |
+| 3 | M0 | `Add LLM client with cache and usage log` | `llm.py`: endpoint OpenAI-compatível, cache em disco, `llm_calls.jsonl`, contadores (entrada, saída, raciocínio), checagem de janela | D3, D6 |
+| 4 | M0 | `Add embedding encoder` | `embed.py`: Qwen3-Embedding, instrução só na query, vetores normalizados, aviso de corte | D8 |
+| 5 | M1 | `Add type registry with magma profile` | `schema.py`: declaração de nós e arestas, camadas, produtores, efeitos; perfil `magma` | D9 |
+| 6 | M1 | `Add typed multigraph with JSON persistence` | `graph.py`: `Node`, `Edge`, `MultiDiGraph`, validação contra o perfil, save/load | §1.2, §6.2 |
+| 7 | M1 | `Add vector and BM25 indexes` | `index.py`: FAISS `IndexFlatIP` + BM25, ambos com máscara de visibilidade | D7, §1.3 |
+| 8 | M1 | `Add temporal tagger` | `temporal.py`: `dateparser` com data-base do evento; janela `[τs, τe]` | §1.3, §6.2 |
+| 9 | M1 | `Add fast path ingestion` | `ingest.py`: Alg. 2 (evento, `TEMP`, embedding, BM25, `SEM`, fila) | §1.4, §6.3 |
+| 10 | M1 | `Add slow path consolidation` | `ingest.py`: Alg. 3, prompt C.1, entidades e `ENT`, datas, `CAUSAL` com δ | §1.4, §6.3 |
+| 11 | M1 | `Add intent router` | `router.py`: palavras-chave + protótipos, janela temporal, `v_q`, `q_key` | D2 |
+| 12 | M1 | `Add RRF anchor selection` | `retrieve.py`: Stage 2 (Eq. 4), agregação de facetas por âncora | §1.3, D9 |
+| 13 | M1 | `Add heuristic beam search` | `retrieve.py`: Stage 3 (Alg. 1, Eqs. 5–6) | §1.3, §6.4 |
+| 14 | M1 | `Add graph linearization with token budget` | `retrieve.py`: Stage 4 (ordenação, Eq. 7, budgeting) | §1.3 |
+| 15 | M1 | `Add adaptive QA prompt` | `qa.py`: prompt C.2 com instrução dinâmica do router | §1.6, §6.4 |
+| 16 | M1 | `Add memory facade with background consolidation` | `memory.py`: `add_turn`, `consolidate(drain)`, `query`; thread real | §6.3 |
+| 17 | M1 | `Add interactive console` | `cli.py`: `chat`, `ingest`, `ask`, `/why` com o rastreamento da consulta, `--script` | §6.3 |
+| 18 | M2 | `Add benchmark runner with sample and report modes` | `bench/runner.py`: amostragem estratificada com seed, piloto de custo, teto, `results/<run_id>/` | D1 |
+| 19 | M2 | `Add LoCoMo adapter` | `bench/adapters/locomo.py`: conversas, timestamps, perguntas e categorias | D1 |
+| 20 | M2 | `Add LLM judge` | `bench/judge.py`: prompt C.3, juiz configurável | D3, §1.6 |
+| 21 | M2 | `Add paper ablations` | flags das Tabs. 4 e 5, aplicadas na consulta | §6.5 |
+| 22 | M2 | `Add efficiency metrics` | tempo de build, tokens/query, latência (Tab. 3) | §6.5, §8.4 |
+| 23 | M4 | `Add narrative type profiles` | `narrative/schema.py`: perfis `narrative` e `narrative-min` | D9, §7.2 |
+| 24 | M4 | `Add scene visibility and action-speech split` | fast path: `visible_to` pelo metadado de cena, `action_text`/`speech_text`, `MENTIONS{actor}` | §7.3 |
+| 25 | M4 | `Add claim and role extraction` | slow path: C.1 estendido (claims com `type`, papéis), `STATED`, `MENTIONS{role}` | §7.3, D9 |
+| 26 | M4 | `Add contradiction detection and status rules` | NLI, regra `INVALIDATES`/`CONTRADICTS`/`SUPERSEDES`, `SUPPORTS`, status | §7.3, D9 |
+| 27 | M4 | `Add viewer-scoped retrieval` | `query(q, viewer)`, filtro duro, `status_for(viewer)` | §7.4 |
+| 28 | M4 | `Add narrative linearization` | seções "presenciou" e "foi dito", regras de impressão do status | §7.4 |
+| 29 | M4 | `Add narrative ablations` | B − visibilidade, B − status, B − contradição, `narrative-min` | §7.6 |
+| 30 | M4 | `Add persona agent prompt` | `narrative/agents.py`: prompt de persona (identidade, relações, objetivos, segredos) + memória do viewer + últimos K turnos → `*ação* "fala"`; usado pelas sondas | §7.5, §8.5 |
+| 31 | M4 | `Add live orchestrator` | `narrative/orchestrator.py`: laço de turnos (quem fala, gera, ingere) | §7.5 |
+| 32 | M3 | `Add diagnostic scenario and loader` | formato da §8.3, cenário Épsilon-4, gabarito, sondas | §8.3, D1 |
+| 33 | M4 | `Add narrative console` | `narrative/cli.py`: `play` com `--until` e `--as`; `/scene`, `/narrate`, `/auto`, `/ask`, `/memory` | §7.5 |
+| 34 | M3 | `Add FANToM adapter` | `present` pelas entradas e saídas; perguntas fechadas | D1 |
+| 35 | M3 | `Add FactConsolidation adapter` | fatos como turnos de narração; métrica oficial | D1 |
+| 36 | M5 | `Add full context baseline` | C1 | §8.5 |
+| 37 | M5 | `Add naive RAG baseline` | C2 (LlamaIndex só para indexar e recuperar) | D4, D6 |
+| 38 | M6 | `Add narrative metrics` | RLR, ELR, DCR, FUD, CIA, Contradiction F1, acurácia do router | §8.4 |
+| 39 | M6 | `Add second judge agreement` | rejulgamento de amostra, κ de Cohen | D3 |
+| 40 | M6 | `Add statistics and result tables` | bootstrap, McNemar, permutação, tabelas e gráficos | §8.4 |
+| 41 | M7 | `Add LongMemEval-KU adapter` | opcional, se aprovado na implementação | D1 |
+
+Os commits 32, 34 e 35 (cenário e adaptadores) não dependem de `narrative/` e podem vir antes dos 23–31. O 33 (console narrativo) depende do orquestrador (31) e do loader de cenário (32).
 
 **Gargalo esperado:** inferência na ingestão (2 chamadas LLM por turno na Branch A; 2–3 na Branch B). As execuções de benchmark rodam em background enquanto o resto é implementado; o cache evita repetir chamadas.
 
@@ -719,6 +802,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
 - LLM-as-a-Judge — Zheng et al., 2023, *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena* (NeurIPS 2023)
 - Viés de autopreferência do juiz — Panickssery, Bowman & Feng, 2024, *LLM Evaluators Recognize and Favor Their Own Generations* (NeurIPS 2024)
 - Sentence-BERT — Reimers & Gurevych, 2019 (EMNLP)
+- Generative Agents — Park et al., 2023, *Generative Agents: Interactive Simulacra of Human Behavior* (UIST 2023); citado pelo artigo do MAGMA. Origem da "entrevista" de agentes usada no console narrativo (§7.5)
 
 ---
 
@@ -735,6 +819,7 @@ Fase atual: prova de conceito. Critério para entrar no PoC: ser exigido pelos r
 | Grafo de crenças explícito (`BELIEVES {confidence}`) | O status relativo ao observador cobre os RFs | §7.4 |
 | Desafios narrativos: sarcasmo, boatos, promessas, ToM de 2ª ordem, decaimento de memória, hipotéticos, vínculos sociais, autoridade, `REPLIES_TO`, `AWARE_THAT` | Cada um é um projeto à parte | §3.2 |
 | Sessões ao vivo como instrumento de **avaliação** (o orquestrador em si está no PoC) | Variância e custo; o PoC mede por replay | §7.5 |
+| Interface web ou visualização interativa do grafo | Os consoles de terminal (§6.3, §7.5) já cobrem a interação e a demonstração; o grafo sai em JSON (`/save`) | §6.3, §7.5 |
 | Baselines do artigo (A-MEM, Nemori, MemoryOS) e Mem0 rodando com o LLM do projeto | Cada um exige integração própria; números publicados usam outro LLM e não são comparáveis | D4 |
 | Comparação ampla de embeddings | O PoC fixa um modelo | D8 |
 | LongMemEval_S inteiro | Cada pergunta tem ~500 turnos de histórico próprio, então a ingestão é por pergunta: custo desproporcional para o PoC | D1 |
