@@ -5,7 +5,13 @@ Vale para todo o código Python do projeto (`magma/`, `narrative/`, `bench/`, `b
 ## 1. Legibilidade primeiro
 O projeto precisa ser lido e explicado de ponta a ponta. Entre uma solução curta e esperta e uma mais longa e óbvia, escolha a óbvia.
 
-- Funções curtas, com um propósito; nomes que dizem o que a coisa é (`anchor_scores`, não `s`).
+- Funções curtas, com um propósito.
+
+### Nomes
+- **Descritivos e por extenso:** o nome diz o que a coisa é, sem abreviações (`anchor_scores`, não `s`; `semantic_edge_threshold`, não `sem_thr`; `Layer.TEMPORAL`, não `Layer.TEMP`).
+- **Exceção:** símbolos e siglas do artigo, quando quem lê o código vai compará-lo com a equação (`rrf_k`, `lambda1`, `lambda2`, `w_tq`, `top_k`). A docstring diz a que equação ou tabela o nome corresponde.
+- Membros de Enum em maiúsculas e com o valor igual ao nome (`CAUSAL = "CAUSAL"`), para que o texto gravado em JSON e o código digam a mesma coisa.
+- Booleanos como pergunta (`is_anchor`, `adaptive`); funções como verbo (`select_anchors`, `linearize`); classes como substantivo (`AnchorSet`, `GraphStore`).
 - Fluxo explícito: nada de metaprogramação, `getattr`/`setattr` dinâmicos, decoradores que mudam assinatura, registro automático por importação, `**kwargs` repassados às cegas ou monkey patching.
 - Compreensões só quando cabem numa linha legível; senão, um `for`.
 - Sem herança profunda. Composição e funções simples resolvem quase tudo.
@@ -34,7 +40,9 @@ Todo código é tipado e passa no `mypy` (configuração em `mypy.ini`).
 - Dados internos: `@dataclass(frozen=True)` sempre que não precisarem mudar.
 - Dados com formato de JSON que cruzam fronteiras (mensagens para o LLM, arquivos de cenário, linhas de log): `TypedDict`.
 - Saída de LLM: modelo `pydantic`, que valida o que chega.
-- Conjuntos fechados de valores (camadas, intenções, ablações): `Literal` ou `Enum`, nunca `str` solto.
+- Conjuntos fechados de valores do domínio (camadas, intenções, ablações, papéis, status): `StrEnum`, nunca `str` solto. O Enum é a fonte única dos valores (percorre-se com `for x in Layer`), valida texto vindo de arquivo, linha de comando ou LLM (`Layer("CAUSAL")`) e é gravado como texto no JSON.
+- `Literal` só para campos que copiam um formato externo dentro de um `TypedDict` (ex.: `role` das mensagens da API do LLM, definido pelo provedor).
+- Enum não pode ser estendido. Tipos que um pacote acrescenta a outro (ex.: tipos de nó e de aresta de um perfil) ficam num Enum por pacote, validados pelo registro de tipos.
 - Interfaces: `Protocol`.
 - **Evitar `dict` puro e `Any`.** `dict[str, X]` só quando a chave é de fato um identificador arbitrário (ex.: `node_id → Node`), nunca como registro com campos. `Any` só na borda com uma biblioteca sem tipos, isolado num único lugar e convertido para um tipo do projeto logo em seguida.
 - Sem `# type: ignore` sem um comentário explicando o motivo.

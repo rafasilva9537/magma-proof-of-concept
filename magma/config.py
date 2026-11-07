@@ -8,60 +8,86 @@ applied at query time over the same graph.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Literal
+from enum import StrEnum
 
-Layer = Literal["TEMP", "CAUSAL", "SEM", "ENT"]
-Intent = Literal["WHY", "WHEN", "ENTITY"]
-Ablation = Literal[
-    "no_adaptive_policy",
-    "no_causal",
-    "no_temporal",
-    "no_entity",
-    "only_causal",
-    "only_temporal",
-    "only_entity",
-]
 
-LAYERS: tuple[Layer, ...] = ("TEMP", "CAUSAL", "SEM", "ENT")
-INTENTS: tuple[Intent, ...] = ("WHY", "WHEN", "ENTITY")
+class Layer(StrEnum):
+    """The four edge layers of the memory graph."""
 
-# Table 4 removes one component; Table 5 keeps a single graph layer.
-ABLATION_LAYERS: dict[Ablation, tuple[Layer, ...]] = {
-    "no_adaptive_policy": LAYERS,
-    "no_causal": ("TEMP", "SEM", "ENT"),
-    "no_temporal": ("CAUSAL", "SEM", "ENT"),
-    "no_entity": ("TEMP", "CAUSAL", "SEM"),
-    "only_causal": ("CAUSAL",),
-    "only_temporal": ("TEMP",),
-    "only_entity": ("ENT",),
-}
+    TEMPORAL = "TEMPORAL"
+    CAUSAL = "CAUSAL"
+    SEMANTIC = "SEMANTIC"
+    ENTITY = "ENTITY"
+
+
+class Intent(StrEnum):
+    """Query intent detected by the router."""
+
+    WHY = "WHY"
+    WHEN = "WHEN"
+    ENTITY = "ENTITY"
+
+
+class Ablation(StrEnum):
+    """Ablation: run the system with one component removed, to measure its contribution.
+
+    Table 4 of the paper removes one component; Table 5 keeps a single graph layer.
+    """
+
+    NO_ADAPTIVE_POLICY = "no_adaptive_policy"
+    NO_CAUSAL = "no_causal"
+    NO_TEMPORAL = "no_temporal"
+    NO_ENTITY = "no_entity"
+    ONLY_CAUSAL = "only_causal"
+    ONLY_TEMPORAL = "only_temporal"
+    ONLY_ENTITY = "only_entity"
+
+    @property
+    def kept_layers(self) -> tuple[Layer, ...]:
+        match self:
+            case Ablation.NO_ADAPTIVE_POLICY:
+                return tuple(Layer)
+            case Ablation.NO_CAUSAL:
+                return (Layer.TEMPORAL, Layer.SEMANTIC, Layer.ENTITY)
+            case Ablation.NO_TEMPORAL:
+                return (Layer.CAUSAL, Layer.SEMANTIC, Layer.ENTITY)
+            case Ablation.NO_ENTITY:
+                return (Layer.TEMPORAL, Layer.CAUSAL, Layer.SEMANTIC)
+            case Ablation.ONLY_CAUSAL:
+                return (Layer.CAUSAL,)
+            case Ablation.ONLY_TEMPORAL:
+                return (Layer.TEMPORAL,)
+            case Ablation.ONLY_ENTITY:
+                return (Layer.ENTITY,)
 
 
 @dataclass(frozen=True)
 class LayerWeights:
     """One weight per graph layer: a row of w_Tq."""
 
-    temp: float
+    temporal: float
     causal: float
-    sem: float
-    ent: float
+    semantic: float
+    entity: float
 
     def of(self, layer: Layer) -> float:
-        if layer == "TEMP":
-            return self.temp
-        if layer == "CAUSAL":
-            return self.causal
-        if layer == "SEM":
-            return self.sem
-        return self.ent
+        match layer:
+            case Layer.TEMPORAL:
+                return self.temporal
+            case Layer.CAUSAL:
+                return self.causal
+            case Layer.SEMANTIC:
+                return self.semantic
+            case Layer.ENTITY:
+                return self.entity
 
     def keep_only(self, layers: tuple[Layer, ...]) -> LayerWeights:
         """Zero the weight of every layer not listed."""
         return LayerWeights(
-            temp=self.temp if "TEMP" in layers else 0.0,
-            causal=self.causal if "CAUSAL" in layers else 0.0,
-            sem=self.sem if "SEM" in layers else 0.0,
-            ent=self.ent if "ENT" in layers else 0.0,
+            temporal=self.temporal if Layer.TEMPORAL in layers else 0.0,
+            causal=self.causal if Layer.CAUSAL in layers else 0.0,
+            semantic=self.semantic if Layer.SEMANTIC in layers else 0.0,
+            entity=self.entity if Layer.ENTITY in layers else 0.0,
         )
 
 
@@ -74,19 +100,21 @@ class IntentWeights:
     entity: LayerWeights
 
     def of(self, intent: Intent) -> LayerWeights:
-        if intent == "WHY":
-            return self.why
-        if intent == "WHEN":
-            return self.when
-        return self.entity
+        match intent:
+            case Intent.WHY:
+                return self.why
+            case Intent.WHEN:
+                return self.when
+            case Intent.ENTITY:
+                return self.entity
 
     def average(self) -> LayerWeights:
         rows = (self.why, self.when, self.entity)
         return LayerWeights(
-            temp=sum(r.temp for r in rows) / 3,
+            temporal=sum(r.temporal for r in rows) / 3,
             causal=sum(r.causal for r in rows) / 3,
-            sem=sum(r.sem for r in rows) / 3,
-            ent=sum(r.ent for r in rows) / 3,
+            semantic=sum(r.semantic for r in rows) / 3,
+            entity=sum(r.entity for r in rows) / 3,
         )
 
 
@@ -108,8 +136,8 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class IngestConfig:
-    sem_threshold: float = 0.6  # provisional: set after measuring the embedding's cosine distribution
-    sem_max_neighbors: int = 5
+    semantic_edge_threshold: float = 0.6  # provisional: set after measuring the embedding's cosine distribution
+    semantic_edge_max_neighbors: int = 5
     causal_min_confidence: float = 0.5
     neighborhood_hops: int = 2
 
@@ -131,9 +159,9 @@ class TraversalConfig:
     lambda1: float = 1.0
     lambda2: float = 0.5
     intent_weights: IntentWeights = IntentWeights(
-        why=LayerWeights(temp=1.5, causal=5.0, sem=2.5, ent=2.5),
-        when=LayerWeights(temp=4.0, causal=3.0, sem=2.5, ent=2.5),
-        entity=LayerWeights(temp=0.5, causal=3.0, sem=2.5, ent=6.0),
+        why=LayerWeights(temporal=1.5, causal=5.0, semantic=2.5, entity=2.5),
+        when=LayerWeights(temporal=4.0, causal=3.0, semantic=2.5, entity=2.5),
+        entity=LayerWeights(temporal=0.5, causal=3.0, semantic=2.5, entity=6.0),
     )
 
 
@@ -151,19 +179,15 @@ class Config:
     context: ContextConfig = ContextConfig()
     ablation: Ablation | None = None
 
-    def __post_init__(self) -> None:
-        if self.ablation is not None and self.ablation not in ABLATION_LAYERS:
-            raise ValueError(f"unknown ablation {self.ablation!r}; expected one of {sorted(ABLATION_LAYERS)}")
-
     @property
     def active_layers(self) -> tuple[Layer, ...]:
         if self.ablation is None:
-            return LAYERS
-        return ABLATION_LAYERS[self.ablation]
+            return tuple(Layer)
+        return self.ablation.kept_layers
 
     @property
     def adaptive(self) -> bool:
-        return self.ablation != "no_adaptive_policy"
+        return self.ablation is not Ablation.NO_ADAPTIVE_POLICY
 
     def layer_weights(self, intent: Intent) -> LayerWeights:
         """Weight vector w_Tq for an intent, after the active ablation.

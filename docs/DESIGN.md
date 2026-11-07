@@ -104,6 +104,10 @@ Referência: Jiang, D.; Li, Y.; Li, G.; Li, B. *MAGMA: A Multi-Graph based Agent
 - **Intenções:** Stage 1 diz `{WHY, WHEN, ENTITY}`, mas o prompt QA usa categorias LoCoMo (Multi-hop/Temporal/Open-domain/Single-hop) "geradas pelo router". Não fica claro se são um ou dois classificadores.
 - **`w_phrase`** aparece nos hiperparâmetros, mas não existe aresta "phrase" no texto.
 - **δ (limiar causal)**, **γ (decay)** e **BeamWidth** não têm valor declarado.
+- **A Tab. 6 lista parâmetros que o algoritmo não usa:** `w_keyword (Fusion)` (a Eq. 4 não tem peso), `Sim. Threshold` e `Drop Threshold` (o Alg. 1 só corta vizinhos pelo `BeamWidth` e pelo `Budget`). O único limiar de similaridade definido no texto é o `θ_sim` das arestas `SEM` (§3.2), sem valor.
+- **Canais do RRF:** a Eq. 4 soma três canais (`vec`, `key`, `time`), mas a linha 2 do Alg. 1 só passa dois (`V.SEARCH(q)`, `K.SEARCH(q_key)`).
+- **"w/o Adaptive Policy" (Tab. 4)** não é definida: o texto só diz que a busca "degenera numa caminhada estática pelo grafo".
+- **Limiares absolutos de cosseno dependem do modelo de embedding:** os valores da Tab. 6 foram calibrados para o MiniLM e não se transferem para outro modelo.
 - **"Event segmentation"** no fast path não é especificada (cada turno? cada fato?).
 - **A extração C.1 usa LLM**, mas o fast path diz "sem LLM bloqueante" → a extração precisa ir para o slow path.
 - Em benchmark offline, a consolidação "assíncrona" roda na prática em lote após a ingestão.
@@ -299,19 +303,22 @@ tests/           # testes unitários de RRF, beam search e linearização com gr
 | Classificador "leve" de intenção | Keywords + fallback por similaridade com protótipos (embedding) | Determinístico, custo zero, acurácia mensurável (D2) |
 | Instrução dinâmica C.2 (4 categorias) × router (3 intenções) | WHEN→Temporal, WHY→Multi-hop/Inferência, ENTITY→Single-hop; "both/all/compare" → Multi-hop | Sem oracle; uma única fonte de roteamento |
 | `w_phrase` | Peso da aresta `SEM` (similaridade entre trechos) | Único tipo de aresta sem peso declarado |
+| `w_keyword (Fusion)` 2.0–5.0 | **RRF ponderado**: `score(n) = Σ_c w_c / (k + r_c(n))`, com `w_keyword = 2.0` e `w_vec = w_time = 1.0` | O nome diz "fusão"; o canal lexical cobre nomes próprios e termos raros, em que o embedding falha. Ponta baixa do intervalo para não dominar os outros canais. Peso dentro do canal lexical (como no código oficial) não muda a fusão, que só usa a posição. Teste de sensibilidade opcional: RRF sem peso (Eq. 4 literal) |
 | Matriz `w_Tq` | Pontos dentro dos intervalos da Tab. 6 (ex.: WHY: causal 5.0, temp 1.5, ent 2.5, sem 2.5; WHEN: temp 4.0, causal 3.0, ent 2.5, sem 2.5; ENTITY: ent 6.0, causal 3.0, sem 2.5, temp 0.5) | Respeita os intervalos publicados |
 | λ2 | 0.5 (meio do intervalo 0.3–0.7) | — |
 | γ (decay) | 0.9 | Não declarado |
 | BeamWidth | 10 | Valor do código-referência |
 | δ (limiar causal) | 0.5 sobre a confiança emitida pelo LLM | Não declarado |
-| θ_sim (aresta SEM) | 0.6, no máximo 5 vizinhos por nó | Evita a teia hiperdensa (~17 arestas/nó) do código oficial |
-| Drop threshold 0.15 | Descarta vizinho com `sim(n_j,q) < 0.15` | Interpretação literal |
+| θ_sim (aresta SEM) = `Sim. Threshold` da Tab. 6 | Limiar da aresta `SEM`, com no máximo 5 vizinhos por nó. **Valor medido no fast path** (commit 9) pela distribuição de cossenos do embedding escolhido numa conversa do LoCoMo; 0.6 é provisório | Único limiar de similaridade definido no texto (§3.2). O intervalo 0.10–0.30 é do MiniLM e, com outro embedding, ligaria quase todos os pares. Descartadas: piso de similaridade na travessia (como no código oficial; duplica o termo `λ2·sim` da Eq. 5 e não está no Alg. 1) e piso do canal vetorial (sem apoio no texto) |
+| Drop threshold 0.15 | Piso absoluto: descarta o vizinho com `sim(n_j,q) < 0.15`. Valor conferido na beam search (commit 13) com a mesma medição | Leitura mais simples de "drop"; com embeddings de cosseno alto funciona como rede de segurança. Descartadas: queda relativa por passo (como no código oficial; regra que o artigo não descreve) e não usar (Alg. 1 literal; equivalente se o piso nunca disparar) |
 | Orçamento de contexto | ~2.5k tokens | Na ordem dos 3.37k tokens/query da Tab. 3 |
 | Async | Thread real + `drain` antes das sondas | Fidelidade + reprodutibilidade |
+| "w/o Adaptive Policy" (Tab. 4) | Mesmo `w_Tq` para toda pergunta: a média das três linhas da matriz, com todas as camadas ativas | Isola só a adaptação à intenção, mantendo a importância média de cada camada. Descartadas: pesos de uma única intenção (arbitrário) e `λ1 = 0` ou travessia sem pontuação (mudam mais que a política). Segunda ablação opcional: todos os pesos iguais |
 
 ### 6.5 Validação da Branch A (não é o benchmark principal)
 - Testes unitários com grafo de brinquedo (RRF, beam, ordenação topológica).
 - **LoCoMo** nos dois modos do runner (D1); no `report`, as 1.986 perguntas nas 5 categorias. Reproduz a Tab. 1 (MAGMA × Full Context), as métricas da Tab. 3 (tempo de build, tokens/query, latência), as **quatro ablações da Tab. 4** (sem adaptive policy, sem causal, sem temporal, sem entity) e as **três de grafo único da Tab. 5** (só causal, só temporal, só entidade), todas como flags do `config.py`, aplicadas na consulta sobre o mesmo grafo. Sem o router adaptativo não há como validar a principal alegação de latência e acurácia do artigo.
+- **Testes de sensibilidade opcionais** (na consulta, sobre o mesmo grafo): RRF sem peso no canal lexical e "w/o Adaptive Policy" com todos os pesos iguais (§6.4).
 - **Objetivo:** verificar se os achados qualitativos do artigo se mantêm com um LLM atual (D1). **Não** é objetivo reproduzir os números absolutos (0.700).
 
 ---
@@ -562,7 +569,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
   - **Recomendação para o PoC:** C1 Full Context (feito por nós, como no artigo) + C2 RAG ingênuo de terceiros (LlamaIndex `VectorStoreIndex`, só indexação e recuperação, mesmo embedding da D8 e mesmo prompt de resposta) + C3 MAGMA original (Branch A).
   - **Por quê:** (1) C1 e C2 são baratos: não fazem extração por LLM na ingestão, só a chamada de resposta, e o runner é o mesmo; (2) C2 atende o requisito metodológico de comparar com uma implementação de terceiros (§2); (3) no FANToM, o próprio benchmark avalia LLMs lendo a conversa inteira, então C1 reproduz a configuração oficial dele.
   - **Alternativas descartadas no PoC:** rodar A-MEM, Nemori e MemoryOS oficiais com o LLM do projeto. É o mais fiel ao artigo, mas cada um exige integração própria (dependências, adaptação de formato, troca de backend de LLM) → §12. Mem0 OSS: mesma razão.
-- [x] **D6 — Camada de acesso a LLM.** ✅ **Decidido:** **sem framework de LLM no núcleo**. Um `magma/llm.py` próprio (~80 linhas) sobre o SDK `openai` (cliente HTTP fino e tipado) apontado para qualquer endpoint OpenAI-compatível (provedor remoto por padrão, D3; endpoint local também funciona), com `pydantic` (só validação de dados) para checar o JSON das extrações. Interface: `chat(messages, schema=None, tag=...) -> {text, parsed, prompt_tokens, completion_tokens, latency_s, cached}`.
+- [x] **D6 — Camada de acesso a LLM.** ✅ **Decidido:** **sem framework de LLM no núcleo**. Um `magma/llm.py` próprio (~80 linhas) sobre o SDK `openai` (cliente HTTP fino e tipado) apontado para qualquer endpoint OpenAI-compatível (provedor remoto por padrão, D3; endpoint local também funciona), com `pydantic` (só validação de dados) para checar o JSON das extrações. Interface: `chat(messages, tag) -> LLMResult` (texto, tokens de entrada, saída e raciocínio, latência, `cached`) e `chat_structured(messages, schema, tag) -> Structured[T]` (valor validado + `LLMResult`); o envio fica atrás de uma interface `ChatBackend`, o que permite testar sem API.
   - **Por quê:** (1) o roteamento, a recuperação e a consolidação *são* a contribuição, e não podem ficar dentro de abstrações de terceiros; (2) tokens e latência são variáveis dependentes (RF4/H3), e overhead ou retries escondidos de framework contaminariam a medição; (3) todo prompt citado no relatório é exatamente a string enviada, auditável no `llm_calls.jsonl`; (4) frameworks de LLM mudam de API com frequência → risco de reprodutibilidade; (5) os "agentes" aqui são prompts com contexto recuperado, sem tool calling, e o orquestrador é um laço simples de turnos. LangGraph modela grafo de *controle de fluxo*, não grafo de *memória*.
   - **Descartados:** LangChain/LangGraph (abstração pesada, templates e parsers ocultos); PydanticAI (mais leve e tipado, mas ainda é um laço de agente que injeta instruções/ferramentas no prompt para saída estruturada); LiteLLM (desnecessário: endpoints OpenAI-compatíveis já cobrem local e remoto).
   - **Exceção:** o baseline C2 usa LlamaIndex **só para indexar e recuperar** (`retriever.retrieve`). A resposta usa o mesmo prompt de persona/QA das outras arquiteturas, para que a única variável seja a memória.
@@ -735,31 +742,31 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
 |---|---|---|---|---|
 | 1 | M0 | `Add project scaffolding` | `requirements.txt`, `pytest.ini`, pacotes `magma/`, `bench/`, `baselines/`, `tests/`, `.env.example` | §6.2 |
 | 2 | M0 | `Add config module` | `config.py`: Tab. 6 + escolhas da §6.4 + flags de ablação | §1.5, §6.4 |
-| 3 | M0 | `Add LLM client with cache and usage log` | `llm.py`: endpoint OpenAI-compatível, cache em disco, `llm_calls.jsonl`, contadores (entrada, saída, raciocínio), checagem de janela | D3, D6 |
-| 4 | M0 | `Add embedding encoder` | `embed.py`: Qwen3-Embedding, instrução só na query, vetores normalizados, aviso de corte | D8 |
+| 3 | M0 | `Implement LLM client with cache and usage log` | `llm.py`: endpoint OpenAI-compatível, cache em disco, `llm_calls.jsonl`, contadores (entrada, saída, raciocínio), checagem de janela | D3, D6 |
+| 4 | M0 | `Wrap embedding model` | `embed.py`: Qwen3-Embedding, instrução só na query, vetores normalizados, aviso de corte | D8 |
 | 5 | M1 | `Add type registry with magma profile` | `schema.py`: declaração de nós e arestas, camadas, produtores, efeitos; perfil `magma` | D9 |
-| 6 | M1 | `Add typed multigraph with JSON persistence` | `graph.py`: `Node`, `Edge`, `MultiDiGraph`, validação contra o perfil, save/load | §1.2, §6.2 |
+| 6 | M1 | `Implement typed multigraph with JSON persistence` | `graph.py`: `Node`, `Edge`, `MultiDiGraph`, validação contra o perfil, save/load | §1.2, §6.2 |
 | 7 | M1 | `Add vector and BM25 indexes` | `index.py`: FAISS `IndexFlatIP` + BM25, ambos com máscara de visibilidade | D7, §1.3 |
 | 8 | M1 | `Add temporal tagger` | `temporal.py`: `dateparser` com data-base do evento; janela `[τs, τe]` | §1.3, §6.2 |
-| 9 | M1 | `Add fast path ingestion` | `ingest.py`: Alg. 2 (evento, `TEMP`, embedding, BM25, `SEM`, fila) | §1.4, §6.3 |
-| 10 | M1 | `Add slow path consolidation` | `ingest.py`: Alg. 3, prompt C.1, entidades e `ENT`, datas, `CAUSAL` com δ | §1.4, §6.3 |
-| 11 | M1 | `Add intent router` | `router.py`: palavras-chave + protótipos, janela temporal, `v_q`, `q_key` | D2 |
-| 12 | M1 | `Add RRF anchor selection` | `retrieve.py`: Stage 2 (Eq. 4), agregação de facetas por âncora | §1.3, D9 |
-| 13 | M1 | `Add heuristic beam search` | `retrieve.py`: Stage 3 (Alg. 1, Eqs. 5–6) | §1.3, §6.4 |
-| 14 | M1 | `Add graph linearization with token budget` | `retrieve.py`: Stage 4 (ordenação, Eq. 7, budgeting) | §1.3 |
+| 9 | M1 | `Implement fast path ingestion` | `ingest.py`: Alg. 2 (evento, `TEMP`, embedding, BM25, `SEM`, fila) | §1.4, §6.3 |
+| 10 | M1 | `Implement slow path consolidation` | `ingest.py`: Alg. 3, prompt C.1, entidades e `ENT`, datas, `CAUSAL` com δ | §1.4, §6.3 |
+| 11 | M1 | `Route queries by intent` | `router.py`: palavras-chave + protótipos, janela temporal, `v_q`, `q_key` | D2 |
+| 12 | M1 | `Select anchors with reciprocal rank fusion` | `retrieve.py`: Stage 2 (Eq. 4), agregação de facetas por âncora | §1.3, D9 |
+| 13 | M1 | `Implement heuristic beam search` | `retrieve.py`: Stage 3 (Alg. 1, Eqs. 5–6) | §1.3, §6.4 |
+| 14 | M1 | `Linearize subgraph within token budget` | `retrieve.py`: Stage 4 (ordenação, Eq. 7, budgeting) | §1.3 |
 | 15 | M1 | `Add adaptive QA prompt` | `qa.py`: prompt C.2 com instrução dinâmica do router | §1.6, §6.4 |
-| 16 | M1 | `Add memory facade with background consolidation` | `memory.py`: `add_turn`, `consolidate(drain)`, `query`; thread real | §6.3 |
+| 16 | M1 | `Expose memory facade with background consolidation` | `memory.py`: `add_turn`, `consolidate(drain)`, `query`; thread real | §6.3 |
 | 17 | M1 | `Add interactive console` | `cli.py`: `chat`, `ingest`, `ask`, `/why` com o rastreamento da consulta, `--script` | §6.3 |
-| 18 | M2 | `Add benchmark runner with sample and report modes` | `bench/runner.py`: amostragem estratificada com seed, piloto de custo, teto, `results/<run_id>/` | D1 |
+| 18 | M2 | `Build benchmark runner with sample and report modes` | `bench/runner.py`: amostragem estratificada com seed, piloto de custo, teto, `results/<run_id>/` | D1 |
 | 19 | M2 | `Add LoCoMo adapter` | `bench/adapters/locomo.py`: conversas, timestamps, perguntas e categorias | D1 |
 | 20 | M2 | `Add LLM judge` | `bench/judge.py`: prompt C.3, juiz configurável | D3, §1.6 |
-| 21 | M2 | `Add paper ablations` | flags das Tabs. 4 e 5, aplicadas na consulta | §6.5 |
-| 22 | M2 | `Add efficiency metrics` | tempo de build, tokens/query, latência (Tab. 3) | §6.5, §8.4 |
+| 21 | M2 | `Support paper ablations` | flags das Tabs. 4 e 5, aplicadas na consulta | §6.5 |
+| 22 | M2 | `Measure build time, tokens and latency` | tempo de build, tokens/query, latência (Tab. 3) | §6.5, §8.4 |
 | 23 | M4 | `Add narrative type profiles` | `narrative/schema.py`: perfis `narrative` e `narrative-min` | D9, §7.2 |
-| 24 | M4 | `Add scene visibility and action-speech split` | fast path: `visible_to` pelo metadado de cena, `action_text`/`speech_text`, `MENTIONS{actor}` | §7.3 |
-| 25 | M4 | `Add claim and role extraction` | slow path: C.1 estendido (claims com `type`, papéis), `STATED`, `MENTIONS{role}` | §7.3, D9 |
-| 26 | M4 | `Add contradiction detection and status rules` | NLI, regra `INVALIDATES`/`CONTRADICTS`/`SUPERSEDES`, `SUPPORTS`, status | §7.3, D9 |
-| 27 | M4 | `Add viewer-scoped retrieval` | `query(q, viewer)`, filtro duro, `status_for(viewer)` | §7.4 |
+| 24 | M4 | `Tag visibility from scene and split action from speech` | fast path: `visible_to` pelo metadado de cena, `action_text`/`speech_text`, `MENTIONS{actor}` | §7.3 |
+| 25 | M4 | `Extract claims and entity roles` | slow path: C.1 estendido (claims com `type`, papéis), `STATED`, `MENTIONS{role}` | §7.3, D9 |
+| 26 | M4 | `Detect contradictions and update claim status` | NLI, regra `INVALIDATES`/`CONTRADICTS`/`SUPERSEDES`, `SUPPORTS`, status | §7.3, D9 |
+| 27 | M4 | `Scope retrieval to the viewer` | `query(q, viewer)`, filtro duro, `status_for(viewer)` | §7.4 |
 | 28 | M4 | `Add narrative linearization` | seções "presenciou" e "foi dito", regras de impressão do status | §7.4 |
 | 29 | M4 | `Add narrative ablations` | B − visibilidade, B − status, B − contradição, `narrative-min` | §7.6 |
 | 30 | M4 | `Add persona agent prompt` | `narrative/agents.py`: prompt de persona (identidade, relações, objetivos, segredos) + memória do viewer + últimos K turnos → `*ação* "fala"`; usado pelas sondas | §7.5, §8.5 |
@@ -771,8 +778,8 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
 | 36 | M5 | `Add full context baseline` | C1 | §8.5 |
 | 37 | M5 | `Add naive RAG baseline` | C2 (LlamaIndex só para indexar e recuperar) | D4, D6 |
 | 38 | M6 | `Add narrative metrics` | RLR, ELR, DCR, FUD, CIA, Contradiction F1, acurácia do router | §8.4 |
-| 39 | M6 | `Add second judge agreement` | rejulgamento de amostra, κ de Cohen | D3 |
-| 40 | M6 | `Add statistics and result tables` | bootstrap, McNemar, permutação, tabelas e gráficos | §8.4 |
+| 39 | M6 | `Measure agreement with a second judge` | rejulgamento de amostra, κ de Cohen | D3 |
+| 40 | M6 | `Compute statistics and result tables` | bootstrap, McNemar, permutação, tabelas e gráficos | §8.4 |
 | 41 | M7 | `Add LongMemEval-KU adapter` | opcional, se aprovado na implementação | D1 |
 
 Os commits 32, 34 e 35 (cenário e adaptadores) não dependem de `narrative/` e podem vir antes dos 23–31. O 33 (console narrativo) depende do orquestrador (31) e do loader de cenário (32).
