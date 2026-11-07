@@ -14,3 +14,4 @@ scipy>=1.13
 tqdm>=4.66
 llama-index-core>=0.11
 pytest>=8.2
+mypy>=1.11

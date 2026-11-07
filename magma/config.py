@@ -7,16 +7,27 @@ applied at query time over the same graph.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from types import MappingProxyType
-from typing import Mapping
+from dataclasses import dataclass, replace
+from typing import Literal
 
-LAYERS = ("TEMP", "CAUSAL", "SEM", "ENT")
-INTENTS = ("WHY", "WHEN", "ENTITY")
+Layer = Literal["TEMP", "CAUSAL", "SEM", "ENT"]
+Intent = Literal["WHY", "WHEN", "ENTITY"]
+Ablation = Literal[
+    "no_adaptive_policy",
+    "no_causal",
+    "no_temporal",
+    "no_entity",
+    "only_causal",
+    "only_temporal",
+    "only_entity",
+]
+
+LAYERS: tuple[Layer, ...] = ("TEMP", "CAUSAL", "SEM", "ENT")
+INTENTS: tuple[Intent, ...] = ("WHY", "WHEN", "ENTITY")
 
 # Table 4 removes one component; Table 5 keeps a single graph layer.
-ABLATIONS = {
-    "no_adaptive_policy": None,
+ABLATION_LAYERS: dict[Ablation, tuple[Layer, ...]] = {
+    "no_adaptive_policy": LAYERS,
     "no_causal": ("TEMP", "SEM", "ENT"),
     "no_temporal": ("CAUSAL", "SEM", "ENT"),
     "no_entity": ("TEMP", "CAUSAL", "SEM"),
@@ -26,15 +37,66 @@ ABLATIONS = {
 }
 
 
-def _frozen(d: Mapping) -> Mapping:
-    return MappingProxyType({k: MappingProxyType(dict(v)) if isinstance(v, Mapping) else v for k, v in d.items()})
+@dataclass(frozen=True)
+class LayerWeights:
+    """One weight per graph layer: a row of w_Tq."""
+
+    temp: float
+    causal: float
+    sem: float
+    ent: float
+
+    def of(self, layer: Layer) -> float:
+        if layer == "TEMP":
+            return self.temp
+        if layer == "CAUSAL":
+            return self.causal
+        if layer == "SEM":
+            return self.sem
+        return self.ent
+
+    def keep_only(self, layers: tuple[Layer, ...]) -> LayerWeights:
+        """Zero the weight of every layer not listed."""
+        return LayerWeights(
+            temp=self.temp if "TEMP" in layers else 0.0,
+            causal=self.causal if "CAUSAL" in layers else 0.0,
+            sem=self.sem if "SEM" in layers else 0.0,
+            ent=self.ent if "ENT" in layers else 0.0,
+        )
 
 
-DEFAULT_INTENT_WEIGHTS = _frozen({
-    "WHY":    {"CAUSAL": 5.0, "TEMP": 1.5, "ENT": 2.5, "SEM": 2.5},
-    "WHEN":   {"TEMP": 4.0, "CAUSAL": 3.0, "ENT": 2.5, "SEM": 2.5},
-    "ENTITY": {"ENT": 6.0, "CAUSAL": 3.0, "SEM": 2.5, "TEMP": 0.5},
-})
+@dataclass(frozen=True)
+class IntentWeights:
+    """The w_Tq matrix: one row of layer weights per query intent."""
+
+    why: LayerWeights
+    when: LayerWeights
+    entity: LayerWeights
+
+    def of(self, intent: Intent) -> LayerWeights:
+        if intent == "WHY":
+            return self.why
+        if intent == "WHEN":
+            return self.when
+        return self.entity
+
+    def average(self) -> LayerWeights:
+        rows = (self.why, self.when, self.entity)
+        return LayerWeights(
+            temp=sum(r.temp for r in rows) / 3,
+            causal=sum(r.causal for r in rows) / 3,
+            sem=sum(r.sem for r in rows) / 3,
+            ent=sum(r.ent for r in rows) / 3,
+        )
+
+
+@dataclass(frozen=True)
+class ChannelWeights:
+    """Weight of each retrieval channel in the reciprocal rank fusion."""
+
+    vector: float = 1.0
+    keyword: float = 2.0
+    time: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -46,7 +108,7 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class IngestConfig:
-    sem_threshold: float = 0.6
+    sem_threshold: float = 0.6  # provisional: set after measuring the embedding's cosine distribution
     sem_max_neighbors: int = 5
     causal_min_confidence: float = 0.5
     neighborhood_hops: int = 2
@@ -56,10 +118,7 @@ class IngestConfig:
 class RetrievalConfig:
     rrf_k: int = 60
     top_k: int = 20
-    vector_min_sim: float = 0.2
-    channel_weights: Mapping[str, float] = field(
-        default_factory=lambda: MappingProxyType({"vector": 1.0, "keyword": 2.0, "time": 1.0})
-    )
+    channel_weights: ChannelWeights = ChannelWeights()
 
 
 @dataclass(frozen=True)
@@ -71,7 +130,11 @@ class TraversalConfig:
     decay: float = 0.9
     lambda1: float = 1.0
     lambda2: float = 0.5
-    intent_weights: Mapping[str, Mapping[str, float]] = DEFAULT_INTENT_WEIGHTS
+    intent_weights: IntentWeights = IntentWeights(
+        why=LayerWeights(temp=1.5, causal=5.0, sem=2.5, ent=2.5),
+        when=LayerWeights(temp=4.0, causal=3.0, sem=2.5, ent=2.5),
+        entity=LayerWeights(temp=0.5, causal=3.0, sem=2.5, ent=6.0),
+    )
 
 
 @dataclass(frozen=True)
@@ -86,35 +149,32 @@ class Config:
     retrieval: RetrievalConfig = RetrievalConfig()
     traversal: TraversalConfig = TraversalConfig()
     context: ContextConfig = ContextConfig()
-    ablation: str | None = None
+    ablation: Ablation | None = None
 
-    def __post_init__(self):
-        if self.ablation is not None and self.ablation not in ABLATIONS:
-            raise ValueError(f"unknown ablation {self.ablation!r}; expected one of {sorted(ABLATIONS)}")
-        for intent in INTENTS:
-            weights = self.traversal.intent_weights.get(intent)
-            if weights is None or set(weights) != set(LAYERS):
-                raise ValueError(f"intent {intent} must define a weight for each of {LAYERS}")
+    def __post_init__(self) -> None:
+        if self.ablation is not None and self.ablation not in ABLATION_LAYERS:
+            raise ValueError(f"unknown ablation {self.ablation!r}; expected one of {sorted(ABLATION_LAYERS)}")
 
     @property
-    def active_layers(self) -> tuple[str, ...]:
-        layers = ABLATIONS.get(self.ablation) if self.ablation else None
-        return layers or LAYERS
+    def active_layers(self) -> tuple[Layer, ...]:
+        if self.ablation is None:
+            return LAYERS
+        return ABLATION_LAYERS[self.ablation]
 
     @property
     def adaptive(self) -> bool:
         return self.ablation != "no_adaptive_policy"
 
-    def layer_weights(self, intent: str) -> dict[str, float]:
-        """Weight vector w_Tq for an intent, after the active ablation."""
-        table = self.traversal.intent_weights
-        if self.adaptive:
-            weights = dict(table[intent])
-        else:
-            weights = {layer: sum(table[i][layer] for i in INTENTS) / len(INTENTS) for layer in LAYERS}
-        return {layer: (w if layer in self.active_layers else 0.0) for layer, w in weights.items()}
+    def layer_weights(self, intent: Intent) -> LayerWeights:
+        """Weight vector w_Tq for an intent, after the active ablation.
 
-    def with_ablation(self, ablation: str | None) -> "Config":
+        Without the adaptive policy every query gets the same row: the average of the three intents.
+        """
+        table = self.traversal.intent_weights
+        row = table.of(intent) if self.adaptive else table.average()
+        return row.keep_only(self.active_layers)
+
+    def with_ablation(self, ablation: Ablation | None) -> Config:
         return replace(self, ablation=ablation)
 
 
