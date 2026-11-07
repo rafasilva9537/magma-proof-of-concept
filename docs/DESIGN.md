@@ -67,7 +67,7 @@ Referência: Jiang, D.; Li, Y.; Li, G.; Li, B. *MAGMA: A Multi-Graph based Agent
   3. Token budgeting por saliência: nós de baixo score viram "...3 intermediate events...".
 
 ### 1.4 Escrita
-- **Fast path (Alg. 2):** segmenta evento → aresta TEMP com o último nó → embedding → indexa no VDB → enfileira id. **Sem LLM.**
+- **Fast path (Alg. 2):** segmenta evento → aresta TEMPORAL com o último nó → embedding → indexa no VDB → enfileira id. **Sem LLM.**
 - **Slow path (Alg. 3):** worker desenfileira → vizinhança 2-hop → prompt → LLM infere arestas **causais e de entidade** → adiciona.
 
 ### 1.5 Hiperparâmetros (Tabela 6)
@@ -104,7 +104,7 @@ Referência: Jiang, D.; Li, Y.; Li, G.; Li, B. *MAGMA: A Multi-Graph based Agent
 - **Intenções:** Stage 1 diz `{WHY, WHEN, ENTITY}`, mas o prompt QA usa categorias LoCoMo (Multi-hop/Temporal/Open-domain/Single-hop) "geradas pelo router". Não fica claro se são um ou dois classificadores.
 - **`w_phrase`** aparece nos hiperparâmetros, mas não existe aresta "phrase" no texto.
 - **δ (limiar causal)**, **γ (decay)** e **BeamWidth** não têm valor declarado.
-- **A Tab. 6 lista parâmetros que o algoritmo não usa:** `w_keyword (Fusion)` (a Eq. 4 não tem peso), `Sim. Threshold` e `Drop Threshold` (o Alg. 1 só corta vizinhos pelo `BeamWidth` e pelo `Budget`). O único limiar de similaridade definido no texto é o `θ_sim` das arestas `SEM` (§3.2), sem valor.
+- **A Tab. 6 lista parâmetros que o algoritmo não usa:** `w_keyword (Fusion)` (a Eq. 4 não tem peso), `Sim. Threshold` e `Drop Threshold` (o Alg. 1 só corta vizinhos pelo `BeamWidth` e pelo `Budget`). O único limiar de similaridade definido no texto é o `θ_sim` das arestas `SEMANTIC` (§3.2), sem valor.
 - **Canais do RRF:** a Eq. 4 soma três canais (`vec`, `key`, `time`), mas a linha 2 do Alg. 1 só passa dois (`V.SEARCH(q)`, `K.SEARCH(q_key)`).
 - **"w/o Adaptive Policy" (Tab. 4)** não é definida: o texto só diz que a busca "degenera numa caminhada estática pelo grafo".
 - **Limiares absolutos de cosseno dependem do modelo de embedding:** os valores da Tab. 6 foram calibrados para o MiniLM e não se transferem para outro modelo.
@@ -266,7 +266,7 @@ magma/
                  # (prompt de instrução só na query, vetores normalizados).
                  # O limite de corte é o `max_seq_length` do MODELO (Qwen3: janela de 32k; modelos curtos como o MiniLM: 256 word-pieces),
                  # não da biblioteca: loga o valor ao carregar e avisa quando um texto passa dele (o corte é silencioso)
-  schema.py      # registro declarativo de tipos de nó e aresta + perfis (D9); perfil `magma` = Event, Entity; TEMP, CAUSAL, SEM, ENT
+  schema.py      # registro declarativo de tipos de nó e aresta + perfis (D9); perfil `magma` = Event, Entity; TEMPORAL, CAUSAL, SEMANTIC, ENTITY
   graph.py       # núcleo agnóstico a tipo: Node{id,type,text,τ,v,attrs,visible_to}, Edge{src,dst,type,weight,attrs},
                  # tipos validados contra o perfil ativo do schema.py; NetworkX MultiDiGraph; persistência em JSON
                  # (save/load), como o código oficial (`graph_db.py:666-706`)
@@ -284,8 +284,8 @@ tests/           # testes unitários de RRF, beam search e linearização com gr
 ```
 
 ### 6.3 Fluxos
-- **`add_turn(speaker, text, timestamp)`** — Fast Path (Alg. 2): cria `EventNode` (1 turno = 1 evento), aresta `TEMP` com o último nó, embedding + BM25, arestas `SEM` (cos > θ_sim, top-5 vizinhos), enfileira o id. **Nenhuma chamada LLM.**
-- **`consolidate()`** — Slow Path (Alg. 3): para cada id da fila → prompt C.1 (entidades, tópico, fatos, datas, resumo) → cria/une `EntityNode` + arestas `ENT`; resolve `dates_mentioned` via `temporal.py` e grava em `A_i`; vizinhança 2-hop → LLM infere arestas `CAUSAL` com confiança ≥ δ.
+- **`add_turn(speaker, text, timestamp)`** — Fast Path (Alg. 2): cria `EventNode` (1 turno = 1 evento), aresta `TEMPORAL` com o último nó, embedding + BM25, arestas `SEMANTIC` (cos > θ_sim, top-5 vizinhos), enfileira o id. **Nenhuma chamada LLM.**
+- **`consolidate()`** — Slow Path (Alg. 3): para cada id da fila → prompt C.1 (entidades, tópico, fatos, datas, resumo) → cria/une `EntityNode` + arestas `ENTITY`; resolve `dates_mentioned` via `temporal.py` e grava em `A_i`; vizinhança 2-hop → LLM infere arestas `CAUSAL` com confiança ≥ δ.
   - Roda como **thread de fundo real** (fiel ao artigo), mas o benchmark chama `consolidate(drain=True)` antes de cada sonda → resultado determinístico.
 - **`query(q)`** — Stage 1→4 (Alg. 1): router → RRF(vec, key, time) top-K âncoras → beam search com `score_v = score_u·γ + exp(λ1·w_Tqᵀ·1_r + λ2·sim)` → ordenação (WHEN: τ; WHY: sort topológico em `CAUSAL`; ENTITY: score) → `<t:τ> conteúdo <ref:id>` → nós de baixa saliência viram `"...N intermediate events..."` até caber no orçamento de tokens → prompt C.2.
   - Além do contexto, `query` devolve um **rastreamento**: intenção e janela do router, âncoras com a posição em cada canal do RRF, caminhos do beam com tipo de aresta e pontuação, nós podados pelo budgeting e tokens. O console imprime esse rastreamento e o runner o grava junto de cada resposta, o que permite estudos de caso no estilo do Ap. E do artigo.
@@ -302,14 +302,14 @@ tests/           # testes unitários de RRF, beam search e linearização com gr
 | C.1 usa LLM, mas o fast path não pode | C.1 roda no **slow path** | Respeita "no blocking LLM" do fast path |
 | Classificador "leve" de intenção | Keywords + fallback por similaridade com protótipos (embedding) | Determinístico, custo zero, acurácia mensurável (D2) |
 | Instrução dinâmica C.2 (4 categorias) × router (3 intenções) | WHEN→Temporal, WHY→Multi-hop/Inferência, ENTITY→Single-hop; "both/all/compare" → Multi-hop | Sem oracle; uma única fonte de roteamento |
-| `w_phrase` | Peso da aresta `SEM` (similaridade entre trechos) | Único tipo de aresta sem peso declarado |
+| `w_phrase` | Peso da aresta `SEMANTIC` (similaridade entre trechos) | Único tipo de aresta sem peso declarado |
 | `w_keyword (Fusion)` 2.0–5.0 | **RRF ponderado**: `score(n) = Σ_c w_c / (k + r_c(n))`, com `w_keyword = 2.0` e `w_vec = w_time = 1.0` | O nome diz "fusão"; o canal lexical cobre nomes próprios e termos raros, em que o embedding falha. Ponta baixa do intervalo para não dominar os outros canais. Peso dentro do canal lexical (como no código oficial) não muda a fusão, que só usa a posição. Teste de sensibilidade opcional: RRF sem peso (Eq. 4 literal) |
 | Matriz `w_Tq` | Pontos dentro dos intervalos da Tab. 6 (ex.: WHY: causal 5.0, temp 1.5, ent 2.5, sem 2.5; WHEN: temp 4.0, causal 3.0, ent 2.5, sem 2.5; ENTITY: ent 6.0, causal 3.0, sem 2.5, temp 0.5) | Respeita os intervalos publicados |
 | λ2 | 0.5 (meio do intervalo 0.3–0.7) | — |
 | γ (decay) | 0.9 | Não declarado |
 | BeamWidth | 10 | Valor do código-referência |
 | δ (limiar causal) | 0.5 sobre a confiança emitida pelo LLM | Não declarado |
-| θ_sim (aresta SEM) = `Sim. Threshold` da Tab. 6 | Limiar da aresta `SEM`, com no máximo 5 vizinhos por nó. **Valor medido no fast path** (commit 9) pela distribuição de cossenos do embedding escolhido numa conversa do LoCoMo; 0.6 é provisório | Único limiar de similaridade definido no texto (§3.2). O intervalo 0.10–0.30 é do MiniLM e, com outro embedding, ligaria quase todos os pares. Descartadas: piso de similaridade na travessia (como no código oficial; duplica o termo `λ2·sim` da Eq. 5 e não está no Alg. 1) e piso do canal vetorial (sem apoio no texto) |
+| θ_sim (aresta SEMANTIC) = `Sim. Threshold` da Tab. 6 | Limiar da aresta `SEMANTIC`, com no máximo 5 vizinhos por nó. **Valor medido no fast path** (commit 9) pela distribuição de cossenos do embedding escolhido numa conversa do LoCoMo; 0.6 é provisório | Único limiar de similaridade definido no texto (§3.2). O intervalo 0.10–0.30 é do MiniLM e, com outro embedding, ligaria quase todos os pares. Descartadas: piso de similaridade na travessia (como no código oficial; duplica o termo `λ2·sim` da Eq. 5 e não está no Alg. 1) e piso do canal vetorial (sem apoio no texto) |
 | Drop threshold 0.15 | Piso absoluto: descarta o vizinho com `sim(n_j,q) < 0.15`. Valor conferido na beam search (commit 13) com a mesma medição | Leitura mais simples de "drop"; com embeddings de cosseno alto funciona como rede de segurança. Descartadas: queda relativa por passo (como no código oficial; regra que o artigo não descreve) e não usar (Alg. 1 literal; equivalente se o piso nunca disparar) |
 | Orçamento de contexto | ~2.5k tokens | Na ordem dos 3.37k tokens/query da Tab. 3 |
 | Async | Thread real + `drain` antes das sondas | Fidelidade + reprodutibilidade |
@@ -375,7 +375,7 @@ Os tipos abaixo são declarados em `narrative/schema.py`, que estende o perfil `
    - `O que foi dito`: as claims, com autor, público e status visto pelo viewer, ex.: `<t:12> B disse a {A,C}: "Eu estava no laboratório" [REFUTADA por <ref:e35>] <ref:c12>`.
    - O status só é impresso quando é diferente de `UNVERIFIED`. Em benchmarks só de fala (LoCoMo, FANToM) quase tudo é claim não verificada; marcar todas gastaria tokens e induziria o LLM a desconfiar de tudo, o que prejudicaria a retenção (H2).
    - Para o mentiroso, as próprias claims aparecem como "você disse X a {…}" → base da consistência de engano (DCR).
-4. **Router:** as mesmas 3 intenções; as arestas novas herdam o peso `w_Tq` da sua camada (D9), sem hiperparâmetro novo (ex.: `INVALIDATES`/`CONTRADICTS` são `CAUSAL`, peso alto em WHY; `SUPERSEDES` é `TEMP`, peso alto em WHEN; `MENTIONS` é `ENT`, peso alto em ENTITY). A aresta de ancoragem `STATED` não tem peso. Router idêntico nas duas branches (variável controlada).
+4. **Router:** as mesmas 3 intenções; as arestas novas herdam o peso `w_Tq` da sua camada (D9), sem hiperparâmetro novo (ex.: `INVALIDATES`/`CONTRADICTS` são `CAUSAL`, peso alto em WHY; `SUPERSEDES` é `TEMPORAL`, peso alto em WHEN; `MENTIONS` é `ENTITY`, peso alto em ENTITY). A aresta de ancoragem `STATED` não tem peso. Router idêntico nas duas branches (variável controlada).
 
 ### 7.5 Agentes
 - `narrative/agents.py`: prompt de persona (identidade, relações, personalidade, objetivos, segredos) + memória com escopo + últimos K turnos visíveis → resposta no formato `*ação* "fala"`.
@@ -510,7 +510,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
   - **Os 3 canais de recuperação do artigo (Stage 2, Eq. 4):** semântico (embedding denso + índice vetorial), lexical (keywords esparsas) e temporal (janela `[τs, τe]`), fundidos por RRF. Cada canal cobre a falha do outro: o semântico acha sinônimos e paráfrases; o lexical acha nomes próprios e termos raros ("Épsilon-4", "chip").
   - **Onde o índice vetorial entra no artigo:** Eq. 3 (`v_i` indexado no vector DB, citando FAISS); Alg. 2 (`VDB.ADD` no fast path); Stage 2 (`V.SEARCH(v_q)`, top-K = 20, canal semântico do RRF); grafo semântico (`cos(v_i,v_j) > θ_sim` exige achar os vizinhos mais próximos de cada nó). Stage 3 (`sim(v_j, v_q)` no beam) só lê o vetor do nó pelo id, sem busca.
   - **Onde entra no código oficial:** `memory_builder.py:645` (`create_semantic_links`, k-NN para arestas `SEMANTIC`); `trg_memory.py:262` (`query`, âncoras, chamado em `query_engine.py:738`); `add_vector` na ingestão (`memory_builder.py:350`; `:400` para os resumos de sessão, que não estão no artigo).
-  - **Onde entra nesta implementação:** (1) canal semântico das âncoras (Stage 2); (2) arestas `SEM` no fast path; (3) Branch B: candidatos para a detecção de contradição (claims parecidas); (4) baseline C2. O beam só lê vetores por id.
+  - **Onde entra nesta implementação:** (1) canal semântico das âncoras (Stage 2); (2) arestas `SEMANTIC` no fast path; (3) Branch B: candidatos para a detecção de contradição (claims parecidas); (4) baseline C2. O beam só lê vetores por id.
   - **Modo usado:** o artigo cita FAISS (Johnson et al., 2019), mas **não informa o tipo de índice**. O código oficial usa por padrão o **índice exato**: `FAISSVectorDB(index_type="flat")` → `IndexFlatL2` (`memory/vector_db.py:136,158`); a factory `backend="auto"` escolhe FAISS se instalado e, se não, NumPy de força bruta, também exato. IVF/HNSW existem no código, mas não são o padrão. Como o MiniLM gera vetores normalizados, ordenar por distância L2 dá o mesmo resultado que ordenar por cosseno.
   - **Recomendação:** FAISS `IndexFlatIP` (produto interno sobre vetores normalizados = cosseno; mesma ordenação do `IndexFlatL2` do código, mas devolve o cosseno direto, que é o que θ_sim e `sim(·)` usam), k-NN exato, igual para todas as arquiteturas; o baseline C2 pluga o mesmo índice no LlamaIndex.
   - **Alternativas comparadas:** k-NN aproximado (FAISS IVF/HNSW), bancos vetoriais locais (pgvector, Qdrant, Chroma, LanceDB, Milvus Lite) e bancos remotos. Motivos para descartar abaixo.
@@ -532,7 +532,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
   - **Janela de 256 tokens não limita o tamanho da conversa:** ela vale **por texto embutido**. O MAGMA gera um vetor por evento (1 turno = 1 nó), então uma conversa de 10 mil turnos vira 10 mil vetores curtos; o tamanho da conversa afeta só o número de vetores, que a busca exata do FAISS absorve (10⁵ vetores × 384d ainda custam milissegundos). O risco real é um **único turno** passar de ~256 word-pieces (~190 palavras em inglês): o `sentence-transformers` **corta o excesso sem avisar** no `max_seq_length` do modelo carregado (o limite é do modelo, não da biblioteca). Turnos de LoCoMo, FANToM e FactConsolidation são curtos; respostas longas de assistente (ex.: LongMemEval) podem estourar.
     - **No PoC:** com a janela de 32k do modelo recomendado, o truncamento não ocorre na prática. A diluição em mensagens longas (abaixo) é limitação conhecida, que o artigo também não trata, e fica para depois do PoC (§12). Mantém-se 1 turno = 1 evento.
     - **Dois problemas distintos:** (a) **truncamento**: o texto passa da janela e o excesso é descartado (só acontece com janela curta; com 32k, um texto de 2.000 palavras ≈ 2.700 tokens cabe inteiro); (b) **diluição**: qualquer embedding comprime o texto inteiro num **único vetor de tamanho fixo**, seja ele uma frase ou um relatório. Num relatório com cinco assuntos, o vetor representa a "média" deles, e uma pergunta sobre um detalhe ("onde o chip foi escondido?") casa forte com o parágrafo certo, mas fraco com o relatório inteiro. A janela longa resolve (a), mas não (b).
-    - **Melhoria futura (§12): segmentação de eventos.** Mensagem longa (ex.: relatório de um agente) viraria vários eventos de até ~512 tokens, cortados em fronteira de parágrafo/frase e encadeados por `TEMP`. Por que segmentar mesmo com janela longa: (1) diluição: unidades menores dão buscas mais precisas (Chen et al., 2024, *Dense X Retrieval: What Retrieval Granularity Should We Use?*, mostra ganho ao indexar proposições em vez de passagens); (2) orçamento de contexto: um nó de 2.700 tokens sozinho estoura o orçamento de ~2.5k da linearização e não deixa espaço para outras evidências; (3) precisão do grafo: arestas causais e de entidade entre eventos atômicos dizem *qual* fato causa *qual*, enquanto entre dois relatórios inteiros ficam vagas. O limite de ~512 tokens por evento é parâmetro de projeto (`config.py`) e pode virar ablação.
+    - **Melhoria futura (§12): segmentação de eventos.** Mensagem longa (ex.: relatório de um agente) viraria vários eventos de até ~512 tokens, cortados em fronteira de parágrafo/frase e encadeados por `TEMPORAL`. Por que segmentar mesmo com janela longa: (1) diluição: unidades menores dão buscas mais precisas (Chen et al., 2024, *Dense X Retrieval: What Retrieval Granularity Should We Use?*, mostra ganho ao indexar proposições em vez de passagens); (2) orçamento de contexto: um nó de 2.700 tokens sozinho estoura o orçamento de ~2.5k da linearização e não deixa espaço para outras evidências; (3) precisão do grafo: arestas causais e de entidade entre eventos atômicos dizem *qual* fato causa *qual*, enquanto entre dois relatórios inteiros ficam vagas. O limite de ~512 tokens por evento é parâmetro de projeto (`config.py`) e pode virar ablação.
   - **Recomendação (revisada):** `Qwen3-Embedding-0.6B` como embedding **principal e igual para todas as arquiteturas**; a checagem com o `all-MiniLM-L6-v2` foi retirada depois: ela só servia para imitar a configuração do artigo, e a avaliação não compara números diretamente com ele (D1).
   - **Por quê:** (1) robustez a mensagens longas, comuns em narrativa multiagente real (janela de 32k contra 256); (2) qualidade bem superior e multilíngue; (3) o argumento "comparabilidade com os números do artigo" é fraco: o LLM do projeto não é o do artigo, então os números absolutos não seriam comparáveis de qualquer forma; o que se compara é a tendência das ablações e o ranking entre arquiteturas; (4) o embedding continua variável controlada (igual para todos); (5) roda em processo, Apache 2.0, modelo pequeno (0,6B); (6) trocar o modelo é uma linha no `config.py`.
   - **Contras aceitos:** mais lento que o MiniLM; as queries usam instrução no formato `Instruct: ...\nQuery: ...` (documentar o template usado); vetores de 1024d (índice maior, irrelevante nesta escala).
@@ -586,7 +586,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
     4. A granularidade da ontologia passa a ser **variável experimental** medida por ablação, não por opinião.
   - **O que cada tipo declara:**
     - **Nó:** nome; descrição (entra no prompt de extração); se é âncora temporal ou faceta; se é embutido (embedding/BM25).
-    - **Aresta:** nome; descrição; tipos de origem/destino permitidos; direcionada ou não; **camada** (`TEMP`, `CAUSAL`, `SEM`, `ENT`) **ou** `anchor=True` (aresta de ancoragem de faceta, sem camada); **produtor**; **efeito epistêmico** (`supports`, `refutes`, `contradicts`, `retracts`, `updates` ou nenhum); template de linearização.
+    - **Aresta:** nome; descrição; tipos de origem/destino permitidos; direcionada ou não; **camada** (`TEMPORAL`, `CAUSAL`, `SEMANTIC`, `ENTITY`) **ou** `anchor=True` (aresta de ancoragem de faceta, sem camada); **produtor**; **efeito epistêmico** (`supports`, `refutes`, `contradicts`, `retracts`, `updates` ou nenhum); template de linearização.
     - **Produtores possíveis:**
       - `rule`: código no fast path, ex.: `NEXT`, `SIM`;
       - `llm_extract`: slow path, campo gerado no prompt de extração a partir da descrição;
@@ -599,7 +599,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
   - **Status por efeito:** `status_for(viewer)` (§7.4) lê o **efeito** declarado da aresta, não o nome dela. Uma aresta nova que refuta entra no cálculo de status sem mudar código.
   - **Definição de faceta:** nó que pertence a **exatamente um** `Event` âncora, ligado a ele por uma aresta com `anchor=True`, e que herda dele `τ` e `visible_to`. No `narrative` a única faceta é a `Claim`, e a aresta de ancoragem é `STATED` (evento de fala → claim que ele enuncia).
     - **Origem:** a estrutura vem da ideia central (§7.1: o ato de fala é fato, o conteúdo é alegação), e já estava na §7.2 original. O nome vem do *Dual-Facet Event* dos rascunhos.
-    - **Autoria sem aresta extra:** o autor fica no atributo `speaker`, e o fast path liga o evento ao ator por uma aresta `ENT` determinística. Como a âncora traz as facetas sem custo de salto, "o que B disse" é **um** salto ponderado: `B ←ENT– evento`, com as claims vindo junto.
+    - **Autoria sem aresta extra:** o autor fica no atributo `speaker`, e o fast path liga o evento ao ator por uma aresta `ENTITY` determinística. Como a âncora traz as facetas sem custo de salto, "o que B disse" é **um** salto ponderado: `B ←ENTITY– evento`, com as claims vindo junto.
     - **Consequência:** uma proposição repetida em outra fala (ou repassada por outro agente) gera **outra** claim, ligada à anterior por `SIM` (`SUPPORTS` é só fato → claim). Um fato que refute a proposição é ligado por `INVALIDATES` a cada uma delas, já que todas são candidatas por similaridade; cada viewer vê o status da versão que ouviu.
     - **Alternativas descartadas:**
       - *Claim como proposição única, compartilhada por várias falas:* autor, público e status deixariam de caber num nó só, o que complica o RF2 sem ganho medível no PoC.
@@ -653,7 +653,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
     |---|---|---|---|---|---|
     | `Event`, `Entity` | — | — | — | — | nó (vêm do artigo) |
     | `Claim` | sim (álibi e acusação no mesmo turno) | sim (`REFUTED`, `CONTESTED`, `RETRACTED`) | sim (alvo de `INVALIDATES`, `CONTRADICTS`, `SUPERSEDES`) | sim ("o que B afirmou?", "o que foi refutado?") | **nó** (faceta) |
-    | `Agent` | — | não (visibilidade fica no `visible_to` do evento; crença é derivada por `status_for(viewer)`) | não (usa as mesmas arestas `ENT` e a mesma intenção ENTITY) | não | **nó** como `Entity{kind=agent}`, não tipo separado |
+    | `Agent` | — | não (visibilidade fica no `visible_to` do evento; crença é derivada por `status_for(viewer)`) | não (usa as mesmas arestas `ENTITY` e a mesma intenção ENTITY) | não | **nó** como `Entity{kind=agent}`, não tipo separado |
     | `PhysicalAction` | não (no máximo um trecho de ação por turno) | não (observado, já é fato) | não (`INVALIDATES` sai do evento, com `action_text` como premissa) | não nos benchmarks da D1 (quase todos só de fala) | **atributo** `action_text` |
 
     - **Por que `Agent` não é tipo separado:** o agente que fala e o agente citado na fala de outro precisam ser o **mesmo nó**. Com dois tipos, a resolução de entidades do slow path teria que unir menções entre tipos diferentes; com `kind`, não. O filtro que um tipo daria, o `kind` também dá.
@@ -666,7 +666,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
     Todo o resto é conteúdo do mundo da história (magia, tecnologia, armas, lugares) e vive no texto do evento, nos vetores e no `kind` da entidade. O conjunto de arestas fica **fechado por função**; o vocabulário do mundo fica **aberto**. Isso fecha as duas fontes de explosão combinatória:
     - verbos do domínio virando aresta (`CASTS_SPELL`, `HACKS`, `HUNTS`…), que cada universo narrativo inventaria;
     - pares de tipos de ponta virando tipos (`TARGETS_AGENT` × `TARGETS_ENTITY`): no registro, cada aresta declara um **conjunto** de origens e destinos (ex.: `{Event, Claim} → Entity`).
-  - **Papéis temáticos em `MENTIONS`.** A aresta `MENTIONS` (evento/claim → entidade, camada `ENT`) leva o atributo `role`, de uma **lista fechada**:
+  - **Papéis temáticos em `MENTIONS`.** A aresta `MENTIONS` (evento/claim → entidade, camada `ENTITY`) leva o atributo `role`, de uma **lista fechada**:
     | `role` | Responde a |
     |---|---|
     | `actor` | quem fez? (criado pelo fast path a partir do ator do turno) |
@@ -677,7 +677,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
     | `other` | aparece sem papel claro; também é o valor quando a extração não classifica |
     - **Base:** papéis temáticos (Fillmore, 1968), no estilo de conjunto pequeno e geral do VerbNet e do PropBank, em vez dos papéis específicos por *frame* do FrameNet (mais de mil frames, cada um com os seus papéis).
     - **Lista fechada, não texto livre:** papéis livres fariam cada história inventar os seus e trariam a explosão de volta pelo atributo.
-    - **Sem peso novo:** `MENTIONS` herda o peso da camada `ENT`, qualquer que seja o papel.
+    - **Sem peso novo:** `MENTIONS` herda o peso da camada `ENTITY`, qualquer que seja o papel.
     - **Consumidores:** a linearização (o papel aparece junto da entidade) e a ablação `narrative-min`.
     - **Ganho esperado modesto:** a recuperação anda por conectividade (a aresta evento → entidade existe com ou sem papel); o papel ajuda o LLM a desambiguar quem fez o quê, com quê e contra quem. A ablação mede.
   - **Tipo de claim:** `Claim.type ∈ {assertion, denial}`. A negação (`DENIES` dos rascunhos) é uma claim de tipo `denial`; o `CONTRADICTS` com a afirmação negada continua saindo da regra do NLI. O tipo serve à linearização ("B negou que…").
@@ -705,7 +705,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
     | `REPLIES_TO` | §12 | `NEXT` + `recipient` cobrem o diálogo; sem consumidor distinto |
     | `THEMATICALLY_RELATED` | removida | redundante com `SIM` |
     | `AWARE_THAT`, promessas, credibilidade, autoridade e afins | §12 | mecanismos novos (ToM de 2ª ordem, compromisso), cada um um projeto à parte |
-    | *(novo)* `MENTIONS`, `SUPPORTS` | `ENT` do artigo; efeito `supports` | — |
+    | *(novo)* `MENTIONS`, `SUPPORTS` | `ENTITY` do artigo; efeito `supports` | — |
   - **Custo do `narrative` sobre o mínimo:** o JSON do slow path ganha `role` por entidade e `type` por claim (dois campos de valores fixos), sem chamadas a mais. Como tokens e latência são variáveis dependentes (RF4/H3), a ablação `narrative-min` mede o preço e o ganho.
   - **Custo de virar atributo:** atributo não é alvo de travessia, então nenhuma aresta aponta para ele. Isso só pesa quando a pergunta exige caminhar até a coisa (ex.: "quem usou a chave?"); é o sinal, na análise de erros, para promover o atributo a faceta.
   - **Alternativas comparadas:**
@@ -748,8 +748,8 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
 | 6 | M1 | `Implement typed multigraph with JSON persistence` | `graph.py`: `Node`, `Edge`, `MultiDiGraph`, validação contra o perfil, save/load | §1.2, §6.2 |
 | 7 | M1 | `Add vector and BM25 indexes` | `index.py`: FAISS `IndexFlatIP` + BM25, ambos com máscara de visibilidade | D7, §1.3 |
 | 8 | M1 | `Add temporal tagger` | `temporal.py`: `dateparser` com data-base do evento; janela `[τs, τe]` | §1.3, §6.2 |
-| 9 | M1 | `Implement fast path ingestion` | `ingest.py`: Alg. 2 (evento, `TEMP`, embedding, BM25, `SEM`, fila) | §1.4, §6.3 |
-| 10 | M1 | `Implement slow path consolidation` | `ingest.py`: Alg. 3, prompt C.1, entidades e `ENT`, datas, `CAUSAL` com δ | §1.4, §6.3 |
+| 9 | M1 | `Implement fast path ingestion` | `ingest.py`: Alg. 2 (evento, `TEMPORAL`, embedding, BM25, `SEMANTIC`, fila) | §1.4, §6.3 |
+| 10 | M1 | `Implement slow path consolidation` | `ingest.py`: Alg. 3, prompt C.1, entidades e `ENTITY`, datas, `CAUSAL` com δ | §1.4, §6.3 |
 | 11 | M1 | `Route queries by intent` | `router.py`: palavras-chave + protótipos, janela temporal, `v_q`, `q_key` | D2 |
 | 12 | M1 | `Select anchors with reciprocal rank fusion` | `retrieve.py`: Stage 2 (Eq. 4), agregação de facetas por âncora | §1.3, D9 |
 | 13 | M1 | `Implement heuristic beam search` | `retrieve.py`: Stage 3 (Alg. 1, Eqs. 5–6) | §1.3, §6.4 |
