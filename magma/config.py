@@ -135,6 +135,14 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class EmbeddingConfig:
+    model_name: str = "Qwen/Qwen3-Embedding-0.6B"
+    # Qwen3-Embedding is instruction-aware: the task description goes on queries only, never on stored texts.
+    query_instruction: str = "Given a question about a conversation, retrieve the memory entries that answer it"
+    batch_size: int = 32
+
+
+@dataclass(frozen=True)
 class IngestConfig:
     semantic_edge_threshold: float = 0.6  # provisional: set after measuring the embedding's cosine distribution
     semantic_edge_max_neighbors: int = 5
@@ -173,6 +181,7 @@ class ContextConfig:
 @dataclass(frozen=True)
 class Config:
     llm: LLMConfig = LLMConfig()
+    embedding: EmbeddingConfig = EmbeddingConfig()
     ingest: IngestConfig = IngestConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
     traversal: TraversalConfig = TraversalConfig()
