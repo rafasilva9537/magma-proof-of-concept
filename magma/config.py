@@ -168,7 +168,9 @@ class LexicalIndexConfig:
 
 @dataclass(frozen=True)
 class IngestConfig:
-    semantic_edge_threshold: float = 0.6  # provisional: set after measuring the embedding's cosine distribution
+    # θ_sim. Measured for Qwen3-Embedding on LoCoMo turns: about the 97th-98th percentile of the cosines
+    # between turns of one conversation. The 0.10-0.30 of Tab. 6 is for MiniLM and does not transfer.
+    semantic_edge_threshold: float = 0.75
     semantic_edge_max_neighbors: int = 5
     causal_min_confidence: float = 0.5
     neighborhood_hops: int = 2

@@ -48,9 +48,11 @@ class FaissVectorIndex(VectorIndex):
         if k == 0:
             return []
         scores, positions = self._index.search(query.reshape(1, -1), k, params=parameters)
-        hits: list[Hit] = []
+        found: list[tuple[float, int]] = []
         for score, position in zip(scores[0], positions[0], strict=True):
             if position < 0:  # FAISS pads with -1 when fewer vectors are allowed than were asked for
                 continue
-            hits.append(Hit(node_id=self._ids[position], score=float(score)))
-        return hits
+            found.append((float(score), int(position)))
+        # Among equal scores FAISS keeps the earliest vectors but lists them in reverse; sort them back.
+        found.sort(key=lambda pair: (-pair[0], pair[1]))
+        return [Hit(node_id=self._ids[position], score=score) for score, position in found]

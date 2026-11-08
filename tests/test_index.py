@@ -55,6 +55,13 @@ def test_vector_search_respects_top_k(make_vectors: Callable[[int], VectorIndex]
     assert make_vectors(2).search(unit(0, 1), top_k=5) == []
 
 
+def test_vector_ties_keep_insertion_order(make_vectors: Callable[[int], VectorIndex]) -> None:
+    index = make_vectors(2)
+    for node_id in ["e1", "e2", "e3", "e4"]:
+        index.add(node_id, unit(1, 0))  # the same turn repeated, e.g. "Thanks!"
+    assert [hit.node_id for hit in index.search(unit(1, 0), top_k=3)] == ["e1", "e2", "e3"]
+
+
 def test_vector_search_only_returns_allowed_ids(make_vectors: Callable[[int], VectorIndex]) -> None:
     index = three_directions(make_vectors)
     hits = index.search(unit(1, 0), top_k=3, allowed=frozenset({"e3", "e2", "not-indexed"}))

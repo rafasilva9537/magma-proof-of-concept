@@ -88,7 +88,8 @@ class VectorIndex(ABC):
     def _store(self, node_id: str, vector: Vector) -> None: ...
 
     @abstractmethod
-    def _search(self, query: Vector, top_k: int, allowed: frozenset[str] | None) -> list[Hit]: ...
+    def _search(self, query: Vector, top_k: int, allowed: frozenset[str] | None) -> list[Hit]:
+        """Best first, ties in insertion order (repeated turns such as "Thanks!" have identical vectors)."""
 
 
 class LexicalIndex(ABC):

@@ -285,6 +285,10 @@ magma/
   memory.py      # interface MemorySystem (add_turn / consolidate / query → resposta + rastreamento) e a fachada MagmaMemory que a implementa
   cli.py         # console (python -m magma): chat, ingest, ask; /why imprime o rastreamento da última consulta
 bench/           # harness, métricas, juiz C.3, estatística (compartilhado com a Arquitetura B)
+  locomo.py                        # leitor do LoCoMo (sessões em ordem, turnos com legenda da imagem, perguntas)
+  calibrate_semantic_threshold.py  # mede a distribuição de cossenos entre turnos e o efeito de cada θ_sim no fast path;
+                                  # rodar de novo ao trocar o embedding (python -m bench.calibrate_semantic_threshold --locomo ...)
+  measure_temporal_windows.py      # cobertura do tagger temporal nas perguntas do LoCoMo (janelas, filtro, granularidade)
 baselines/       # full_context.py, naive_rag.py
 tests/           # testes unitários de RRF, beam search e linearização com grafo de brinquedo
 ```
@@ -318,7 +322,7 @@ tests/           # testes unitários de RRF, beam search e linearização com gr
 | γ (decay) | 0.9 | Não declarado |
 | BeamWidth | 10 | Valor do código-referência |
 | δ (limiar causal) | 0.5 sobre a confiança emitida pelo LLM | Não declarado |
-| θ_sim (aresta SEMANTIC) = `Sim. Threshold` da Tab. 6 | Limiar da aresta `SEMANTIC`, com no máximo 5 vizinhos por nó. **Valor medido no fast path** (commit 9) pela distribuição de cossenos do embedding escolhido numa conversa do LoCoMo; 0.6 é provisório | Único limiar de similaridade definido no texto (§3.2). O intervalo 0.10–0.30 é do MiniLM e, com outro embedding, ligaria quase todos os pares. Descartadas: piso de similaridade na travessia (como no código oficial; duplica o termo `λ2·sim` da Eq. 5 e não está no Alg. 1) e piso do canal vetorial (sem apoio no texto) |
+| θ_sim (aresta SEMANTIC) = `Sim. Threshold` da Tab. 6 | Limiar da aresta `SEMANTIC`, com no máximo 5 vizinhos por nó. **θ_sim = 0.75**, medido com o Qwen3 nas duas primeiras conversas do LoCoMo (vetor de "Falante: texto", como o `ENCODER(n.c)` do Alg. 2): entre turnos de uma conversa, mediana 0.54, p95 0.71, p99 0.78. Com 0.75 (≈ p97–98), cada evento novo ganha em média ~2,2–2,6 arestas e ~70% ganham ao menos uma; com 0.6, 92% batiam o limite de 5 e o limiar não filtrava. Nenhum valor separa assunto de estilo nesse dataset (pares de "Thanks, Caroline!" passam de 0.8); a relevância à pergunta fica com o `λ2·sim` da travessia. Regra para outro embedding: ≈ percentil 97–98 dos cossenos entre turnos de uma conversa, medido com `bench/calibrate_semantic_threshold.py` | Único limiar de similaridade definido no texto (§3.2). O intervalo 0.10–0.30 é do MiniLM e, com outro embedding, ligaria quase todos os pares. Descartadas: piso de similaridade na travessia (como no código oficial; duplica o termo `λ2·sim` da Eq. 5 e não está no Alg. 1) e piso do canal vetorial (sem apoio no texto) |
 | Drop threshold 0.15 | Piso absoluto: descarta o vizinho com `sim(n_j,q) < 0.15`. Valor conferido na beam search (commit 13) com a mesma medição | Leitura mais simples de "drop"; com embeddings de cosseno alto funciona como rede de segurança. Descartadas: queda relativa por passo (como no código oficial; regra que o artigo não descreve) e não usar (Alg. 1 literal; equivalente se o piso nunca disparar) |
 | Instrução do embedding (Qwen3) | Só na query: `Instruct: Given a question about a conversation, retrieve the memory entries that answer it
 Query:`; textos armazenados sem prefixo | Formato do modelo; a tarefa descreve o uso real (pergunta → entrada de memória) |
