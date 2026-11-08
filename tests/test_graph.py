@@ -161,6 +161,15 @@ def test_replace_node_keeps_edges(store: GraphStore) -> None:
         store.replace_node(event("missing"))
 
 
+def test_backend_missing_storage_methods_cannot_be_created() -> None:
+    class Incomplete(GraphStore):
+        def edges(self) -> list[Edge]:
+            return []
+
+    with pytest.raises(TypeError):
+        Incomplete(MAGMA_PROFILE)  # type: ignore[abstract]  # the point of the test
+
+
 def test_visibility_defaults_to_everyone() -> None:
     public = event("e1")
     private = Node(id="e2", type=MagmaNode.EVENT, text="whisper", timestamp=START, visible_to=frozenset({"alice"}))

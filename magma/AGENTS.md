@@ -21,7 +21,7 @@ O projeto precisa ser lido e explicado de ponta a ponta. Entre uma solução cur
 ## 2. Design desacoplado
 Trocar a lógica de uma etapa (roteamento, seleção de âncoras, travessia, linearização) não pode exigir mudanças nas outras.
 
-- Cada etapa expõe uma interface pequena (`typing.Protocol`) e recebe suas dependências pelo construtor. Nenhuma etapa importa a implementação concreta de outra.
+- Cada etapa expõe uma interface pequena (`Protocol` ou `ABC`, ver §4) e recebe suas dependências pelo construtor. Nenhuma etapa importa a implementação concreta de outra.
 - Só a fachada (`memory.py`) e os pontos de entrada (consoles, runner) montam as peças concretas.
 - Runner, métricas e consoles dependem só da interface `MemorySystem` (`add_turn`, `consolidate`, `query`), nunca do interior de `magma/` ou `narrative/`. Toda arquitetura e todo baseline a implementam.
 - Etapas conversam por dataclasses de entrada e saída (ex.: `RouterOutput`, `AnchorSet`), não por estruturas soltas.
@@ -46,7 +46,10 @@ Todo código é tipado e passa no `mypy` (configuração em `mypy.ini`).
 - Conjuntos fechados de valores do domínio (camadas, intenções, ablações, papéis, status): `StrEnum`, nunca `str` solto. O Enum é a fonte única dos valores (percorre-se com `for x in Layer`), valida texto vindo de arquivo, linha de comando ou LLM (`Layer("CAUSAL")`) e é gravado como texto no JSON.
 - `Literal` só para campos que copiam um formato externo dentro de um `TypedDict` (ex.: `role` das mensagens da API do LLM, definido pelo provedor).
 - Enum não pode ser estendido. Tipos que um pacote acrescenta a outro (ex.: tipos de nó e de aresta de um perfil) ficam num Enum por pacote, validados pelo registro de tipos.
-- Interfaces: `Protocol`.
+- **Interfaces: `ABC` ou `Protocol`, conforme o papel.**
+  - **`ABC`** para um contrato com vários métodos que o projeto implementa mais de uma vez e troca inteiro (backends de armazenamento como o `GraphStore`; as arquiteturas e os baselines do `MemorySystem`), sobretudo quando há uma regra que toda implementação precisa cumprir. A regra fica na base: o método público valida e chama um método abstrato que a implementação escreve, então nenhuma implementação consegue pulá-la. A implementação herda da base, o que deixa a relação explícita na leitura e na navegação da IDE.
+  - **`Protocol`** para uma costura estreita (um a três métodos) com uma dependência externa ou entre etapas do pipeline (`ChatBackend`, `TextEncoder`, `Embedder`, router, travessia). Dublês de teste e adaptadores servem sem herdar.
+  - Na dúvida, `Protocol`.
 - **Evitar `dict` puro e `Any`.** `dict[str, X]` só quando a chave é de fato um identificador arbitrário (ex.: `node_id → Node`), nunca como registro com campos. `Any` só na borda com uma biblioteca sem tipos, isolado num único lugar e convertido para um tipo do projeto logo em seguida.
 - Sem `# type: ignore` sem um comentário explicando o motivo.
 

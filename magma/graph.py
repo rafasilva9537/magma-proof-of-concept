@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import TypedDict
 
 from pydantic import TypeAdapter
 
@@ -64,39 +65,101 @@ class Neighbor:
     is_outgoing: bool  # the edge goes from the node asked about to this neighbor
 
 
-class GraphStore(Protocol):
-    @property
-    def profile(self) -> Profile: ...
+class GraphStore(ABC):
+    """Base of every graph backend.
 
-    def add_node(self, node: Node) -> None: ...
+    The public methods check each change against the profile and then call the
+    abstract storage methods, so no backend can skip the checks. A backend only
+    writes the storage methods.
+    """
+
+    def __init__(self, profile: Profile) -> None:
+        self._profile = profile
+
+    @property
+    def profile(self) -> Profile:
+        return self._profile
+
+    def add_node(self, node: Node) -> None:
+        if self.has_node(node.id):
+            raise InvalidGraphChange(f"node {node.id!r} already exists")
+        _check_node(self._profile, node)
+        self._store_node(node)
 
     def replace_node(self, node: Node) -> None:
         """Store a new version of an existing node (same id and type), keeping its edges."""
-        ...
+        current = self.node(node.id)
+        if current.type != node.type:
+            raise InvalidGraphChange(f"node {node.id!r} is {current.type} and cannot become {node.type}")
+        _check_node(self._profile, node)
+        self._store_node(node)
 
-    def add_edge(self, edge: Edge) -> None: ...
+    def add_edge(self, edge: Edge) -> None:
+        source = self.node(edge.source)
+        target = self.node(edge.target)
+        _check_edge(self._profile, edge, source, target)
+        if self.has_edge(edge.source, edge.target, edge.type):
+            raise InvalidGraphChange(f"{edge.type} edge {edge.source!r} -> {edge.target!r} already exists")
+        self._store_edge(edge)
 
-    def has_node(self, node_id: str) -> bool: ...
+    def has_node(self, node_id: str) -> bool:
+        return self._find_node(node_id) is not None
 
     def has_edge(self, source: str, target: str, edge_type: str) -> bool:
         """For an undirected type, an edge in either direction counts."""
-        ...
+        if self._has_edge_from(source, target, edge_type):
+            return True
+        is_directed = self._profile.edge_type(edge_type).is_directed
+        return not is_directed and self._has_edge_from(target, source, edge_type)
 
-    def node(self, node_id: str) -> Node: ...
+    def node(self, node_id: str) -> Node:
+        found = self._find_node(node_id)
+        if found is None:
+            raise UnknownNode(node_id)
+        return found
 
     def nodes(self, node_type: str | None = None) -> list[Node]:
         """In insertion order, which for events is chronological order."""
-        ...
-
-    def edges(self) -> list[Edge]: ...
+        return [node for node in self._all_nodes() if node_type is None or node.type == node_type]
 
     def neighbors(self, node_id: str, layer: Layer | None = None) -> list[Neighbor]:
         """Nodes linked to `node_id` by an edge in either direction, optionally only edges of one layer."""
-        ...
+        self.node(node_id)
+        found: list[Neighbor] = []
+        for neighbor in self._incident(node_id):
+            if layer is None or self._profile.edge_type(neighbor.edge.type).layer is layer:
+                found.append(neighbor)
+        return found
+
+    @abstractmethod
+    def edges(self) -> list[Edge]:
+        """In insertion order."""
+
+    @abstractmethod
+    def _store_node(self, node: Node) -> None:
+        """Insert the node, or overwrite the one with the same id. Already checked."""
+
+    @abstractmethod
+    def _store_edge(self, edge: Edge) -> None:
+        """Insert the edge. Already checked."""
+
+    @abstractmethod
+    def _find_node(self, node_id: str) -> Node | None: ...
+
+    @abstractmethod
+    def _has_edge_from(self, source: str, target: str, edge_type: str) -> bool:
+        """Only in the direction given."""
+
+    @abstractmethod
+    def _all_nodes(self) -> list[Node]:
+        """In insertion order."""
+
+    @abstractmethod
+    def _incident(self, node_id: str) -> list[Neighbor]:
+        """Every edge touching the node: outgoing first, then incoming, each in insertion order."""
 
 
-def check_node(profile: Profile, node: Node) -> None:
-    """Raise if the profile does not allow this node. Shared by every GraphStore implementation."""
+def _check_node(profile: Profile, node: Node) -> None:
     node_type = profile.node_type(node.type)
     is_anchor = node_type.role is NodeRole.ANCHOR
     if is_anchor and node.timestamp is None:
@@ -107,8 +170,7 @@ def check_node(profile: Profile, node: Node) -> None:
         raise InvalidGraphChange(f"node {node.id!r} is visible to no one")
 
 
-def check_edge(profile: Profile, edge: Edge, source: Node, target: Node) -> None:
-    """Raise if the profile does not allow this edge between these two nodes."""
+def _check_edge(profile: Profile, edge: Edge, source: Node, target: Node) -> None:
     if edge.source == edge.target:
         raise InvalidGraphChange(f"{edge.type} edge from {edge.source!r} to itself")
     if not profile.allows(edge.type, source.type, target.type):
