@@ -276,7 +276,8 @@ magma/
                  # tokenizador comum a textos e consultas, persistência dos vetores (.npz)
   faiss_index.py # VectorIndex sobre FAISS IndexFlatIP (D7); único módulo que importa faiss
   bm25_index.py  # LexicalIndex sobre rank_bm25 (Okapi); único módulo que importa rank_bm25
-  temporal.py    # tagger temporal: dateparser com RELATIVE_BASE = timestamp do evento/sessão
+  temporal.py    # tagger temporal (dateparser): expressão → janela do tamanho dela (dia, semana, mês, ano);
+                 # na pergunta, janela [τs, τe]; no turno, resolve dates_mentioned com base no timestamp do evento
   router.py      # Stage 1: intenção T_q∈{WHY,WHEN,ENTITY} + janela [τs,τe] + v_q + q_key
   ingest.py      # Alg.2 Fast Path (sem LLM) + Alg.3 Slow Path (fila + worker; LLM) + prompt C.1
   retrieve.py    # Stage 2 RRF (Eq.4), Stage 3 beam search (Alg.1, Eq.5-6), Stage 4 linearização (Eq.7) + budgeting
@@ -309,6 +310,7 @@ tests/           # testes unitários de RRF, beam search e linearização com gr
 | Classificador "leve" de intenção | Keywords + fallback por similaridade com protótipos (embedding) | Determinístico, custo zero, acurácia mensurável (D2) |
 | Instrução dinâmica C.2 (4 categorias) × router (3 intenções) | WHEN→Temporal, WHY→Multi-hop/Inferência, ENTITY→Single-hop; "both/all/compare" → Multi-hop | Sem oracle; uma única fonte de roteamento |
 | Canal lexical ("keywords esparsas", sem método declarado) | **BM25 Okapi** (`rank_bm25`), `k1 = 1.5`, `b = 0.75`, piso de IDF `ε = 0.25`; tokens = palavras em minúsculas (`\w+`) sem stopwords do inglês, sem stemming; mesmo tokenizador para textos e consultas | Padrão consolidado de busca lexical, com os valores usuais; o código oficial usa um índice invertido próprio de unigramas e bigramas, sem fundamentação publicada |
+| Parser temporal ("temporal tagger" sem método nem granularidade) | `dateparser` com a data de referência (pergunta: fim da conversa; turno: timestamp do evento). Cada expressão vira a **janela do seu tamanho** ("yesterday" = o dia, "last week" = a semana de segunda a domingo, "in June" = o mês, "2022" = o ano); data ambígua lida como passada na pergunta e no período corrente no turno; na pergunta, só valem trechos com palavra temporal ou ano de 4 dígitos, e a janela cobre as menções mais específicas (o ano de "August 11 and August 15 2023" não alarga a janela) | Determinístico e genérico; o código oficial usa regex e `timedelta` específicos do LoCoMo. Expressões compostas ("two weeks before August 11") e vagas ("a few days ago") ficam fora: limitação registrada |
 | `w_phrase` | Peso da aresta `SEMANTIC` (similaridade entre trechos) | Único tipo de aresta sem peso declarado |
 | `w_keyword (Fusion)` 2.0–5.0 | **RRF ponderado**: `score(n) = Σ_c w_c / (k + r_c(n))`, com `w_keyword = 2.0` e `w_vec = w_time = 1.0` | O nome diz "fusão"; o canal lexical cobre nomes próprios e termos raros, em que o embedding falha. Ponta baixa do intervalo para não dominar os outros canais. Peso dentro do canal lexical (como no código oficial) não muda a fusão, que só usa a posição. Teste de sensibilidade opcional: RRF sem peso (Eq. 4 literal) |
 | Matriz `w_Tq` | Pontos dentro dos intervalos da Tab. 6 (ex.: WHY: causal 5.0, temp 1.5, ent 2.5, sem 2.5; WHEN: temp 4.0, causal 3.0, ent 2.5, sem 2.5; ENTITY: ent 6.0, causal 3.0, sem 2.5, temp 0.5) | Respeita os intervalos publicados |

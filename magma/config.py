@@ -142,6 +142,21 @@ class EmbeddingConfig:
     batch_size: int = 32
 
 
+class DatePreference(StrEnum):
+    """How an ambiguous date ("in December", "on Friday") is read against the reference time."""
+
+    PAST = "PAST"  # the most recent one that already happened
+    CURRENT_PERIOD = "CURRENT_PERIOD"  # the one in the current week, month or year
+
+
+@dataclass(frozen=True)
+class TemporalConfig:
+    languages: tuple[str, ...] = ("en",)
+    # A question asks about what already happened; a turn talks about plans as well as about the past.
+    question_preference: DatePreference = DatePreference.PAST
+    mention_preference: DatePreference = DatePreference.CURRENT_PERIOD
+
+
 @dataclass(frozen=True)
 class LexicalIndexConfig:
     """BM25 of the lexical channel. The paper does not give values; these are the usual Okapi defaults."""
@@ -192,6 +207,7 @@ class Config:
     llm: LLMConfig = LLMConfig()
     embedding: EmbeddingConfig = EmbeddingConfig()
     lexical_index: LexicalIndexConfig = LexicalIndexConfig()
+    temporal: TemporalConfig = TemporalConfig()
     ingest: IngestConfig = IngestConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
     traversal: TraversalConfig = TraversalConfig()
