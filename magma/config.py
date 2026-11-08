@@ -143,6 +143,15 @@ class EmbeddingConfig:
 
 
 @dataclass(frozen=True)
+class LexicalIndexConfig:
+    """BM25 of the lexical channel. The paper does not give values; these are the usual Okapi defaults."""
+
+    k1: float = 1.5  # saturation of term frequency
+    b: float = 0.75  # normalization by document length
+    epsilon: float = 0.25  # floor, as a fraction of the mean IDF, for terms found in more than half the documents
+
+
+@dataclass(frozen=True)
 class IngestConfig:
     semantic_edge_threshold: float = 0.6  # provisional: set after measuring the embedding's cosine distribution
     semantic_edge_max_neighbors: int = 5
@@ -182,6 +191,7 @@ class ContextConfig:
 class Config:
     llm: LLMConfig = LLMConfig()
     embedding: EmbeddingConfig = EmbeddingConfig()
+    lexical_index: LexicalIndexConfig = LexicalIndexConfig()
     ingest: IngestConfig = IngestConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
     traversal: TraversalConfig = TraversalConfig()

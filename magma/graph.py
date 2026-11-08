@@ -156,7 +156,7 @@ class GraphStore(ABC):
 
     @abstractmethod
     def _incident(self, node_id: str) -> list[Neighbor]:
-        """Every edge touching the node: outgoing first, then incoming, each in insertion order."""
+        """Every edge touching the node, outgoing first, then incoming, always in the same order."""
 
 
 def _check_node(profile: Profile, node: Node) -> None:
