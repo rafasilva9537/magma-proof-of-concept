@@ -44,7 +44,7 @@ def test_each_intent_favours_its_layer() -> None:
 
 def test_enums_round_trip_through_text() -> None:
     assert Layer("CAUSAL") is Layer.CAUSAL
-    assert Ablation("no_causal") is Ablation.NO_CAUSAL
+    assert Ablation("NO_CAUSAL") is Ablation.NO_CAUSAL
     assert f"{Layer.CAUSAL}" == "CAUSAL"
 
 

@@ -23,9 +23,12 @@ Trocar a lógica de uma etapa (roteamento, seleção de âncoras, travessia, lin
 
 - Cada etapa expõe uma interface pequena (`typing.Protocol`) e recebe suas dependências pelo construtor. Nenhuma etapa importa a implementação concreta de outra.
 - Só a fachada (`memory.py`) e os pontos de entrada (consoles, runner) montam as peças concretas.
+- Runner, métricas e consoles dependem só da interface `MemorySystem` (`add_turn`, `consolidate`, `query`), nunca do interior de `magma/` ou `narrative/`. Toda arquitetura e todo baseline a implementam.
 - Etapas conversam por dataclasses de entrada e saída (ex.: `RouterOutput`, `AnchorSet`), não por estruturas soltas.
 - Parâmetros vêm do `config.py`; nenhum número mágico espalhado pelo código.
 - Um módulo novo ou uma variante (ex.: outro router) entra como outra implementação da mesma interface, não como `if` dentro da existente.
+- `narrative/` importa e estende `magma/`; `magma/` nunca importa `narrative/`.
+- Depois da tag `v-original`, o comportamento do perfil `magma` é fixo (ele é o grupo de controle da comparação). Editar `magma/` é permitido para ganchos e correções, desde que o gancho seja inoperante no perfil `magma` e o teste de regressão (`tests/regression/`) continue passando.
 
 ## 3. Armazenamento atrás de interfaces
 O grafo e os índices são acessados só pelas interfaces (`GraphStore`, índices vetorial e lexical). A implementação atual (NetworkX em memória + JSON) precisa poder ser trocada por Neo4j ou outro backend sem tocar em ingestão, recuperação ou benchmark.

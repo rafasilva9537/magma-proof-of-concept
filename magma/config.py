@@ -34,13 +34,13 @@ class Ablation(StrEnum):
     Table 4 of the paper removes one component; Table 5 keeps a single graph layer.
     """
 
-    NO_ADAPTIVE_POLICY = "no_adaptive_policy"
-    NO_CAUSAL = "no_causal"
-    NO_TEMPORAL = "no_temporal"
-    NO_ENTITY = "no_entity"
-    ONLY_CAUSAL = "only_causal"
-    ONLY_TEMPORAL = "only_temporal"
-    ONLY_ENTITY = "only_entity"
+    NO_ADAPTIVE_POLICY = "NO_ADAPTIVE_POLICY"
+    NO_CAUSAL = "NO_CAUSAL"
+    NO_TEMPORAL = "NO_TEMPORAL"
+    NO_ENTITY = "NO_ENTITY"
+    ONLY_CAUSAL = "ONLY_CAUSAL"
+    ONLY_TEMPORAL = "ONLY_TEMPORAL"
+    ONLY_ENTITY = "ONLY_ENTITY"
 
     @property
     def kept_layers(self) -> tuple[Layer, ...]:
