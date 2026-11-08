@@ -14,7 +14,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Generic, Literal, NotRequired, Protocol, TypedDict, TypeVar, Union
+from typing import Generic, Literal, NotRequired, Protocol, TypedDict, TypeVar
 
 import tiktoken
 from openai import OpenAI, omit
@@ -22,9 +22,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, ValidationError
 
 from magma.config import DEFAULT, LLMConfig
-
-JSONValue = Union[str, int, float, bool, None, list["JSONValue"], dict[str, "JSONValue"]]
-JSONObject = dict[str, JSONValue]
+from magma.json_types import JSONObject
 
 
 class Message(TypedDict):

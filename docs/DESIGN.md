@@ -267,9 +267,11 @@ magma/
                  # O limite de corte é o `max_seq_length` do MODELO (Qwen3: janela de 32k; modelos curtos como o MiniLM: 256 word-pieces),
                  # não da biblioteca: loga o valor ao carregar e avisa quando um texto passa dele (o corte é silencioso)
   schema.py      # registro declarativo de tipos de nó e aresta + perfis (D9); perfil `magma` = nós EVENT, ENTITY; arestas NEXT (TEMPORAL), SIMILAR_TO (SEMANTIC), MENTIONS (ENTITY), CAUSES (CAUSAL)
-  graph.py       # núcleo agnóstico a tipo: Node{id,type,text,τ,v,attrs,visible_to}, Edge{src,dst,type,weight,attrs},
-                 # tipos validados contra o perfil ativo do schema.py; NetworkX MultiDiGraph; persistência em JSON
-                 # (save/load), como o código oficial (`graph_db.py:666-706`)
+  graph.py       # núcleo agnóstico a tipo: Node{id,type,text,τ,attrs,visible_to}, Edge{source,target,type,weight,attrs},
+                 # interface GraphStore, tipos validados contra o perfil ativo do schema.py; persistência em JSON
+                 # (save_graph/load_graph sobre qualquer GraphStore), como o código oficial (`graph_db.py:666-706`).
+                 # O vetor v_i fica no índice vetorial (index.py), não no nó
+  networkx_graph.py  # GraphStore sobre NetworkX MultiDiGraph (aresta com chave = tipo); único módulo que importa networkx
   index.py       # índice vetorial exato (D7) + índice esparso (BM25 via rank_bm25)
   temporal.py    # tagger temporal: dateparser com RELATIVE_BASE = timestamp do evento/sessão
   router.py      # Stage 1: intenção T_q∈{WHY,WHEN,ENTITY} + janela [τs,τe] + v_q + q_key
