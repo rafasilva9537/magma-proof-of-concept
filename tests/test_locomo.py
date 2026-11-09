@@ -1,9 +1,10 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from bench.locomo import find_sample, load_samples, sessions, turn_text
+from bench.locomo import find_sample, load_samples, session_time, sessions, turn_text
 
 SAMPLE = {
     "sample_id": "conv-x",
@@ -49,3 +50,8 @@ def test_questions_are_read(tmp_path: Path) -> None:
 def test_unknown_sample_raises(tmp_path: Path) -> None:
     with pytest.raises(KeyError):
         find_sample(load_samples(write(tmp_path)), "conv-missing")
+
+
+def test_session_time_reads_the_dataset_format(tmp_path: Path) -> None:
+    found = sessions(find_sample(load_samples(write(tmp_path)), "conv-x"))
+    assert [session_time(session) for session in found] == [datetime(2023, 5, 9, 13, 0), datetime(2023, 10, 20, 14, 0)]

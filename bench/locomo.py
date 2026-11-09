@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
@@ -50,6 +51,7 @@ _SAMPLES = TypeAdapter(list[LocomoSample])
 _TURNS = TypeAdapter(list[LocomoTurn])
 _DATE_TIME = TypeAdapter(str)
 _SESSION_KEY = re.compile(r"session_(\d+)")
+_SESSION_TIME_FORMAT = "%I:%M %p on %d %B, %Y"  # "1:56 pm on 8 May, 2023"
 
 
 def load_samples(path: Path) -> list[LocomoSample]:
@@ -82,3 +84,8 @@ def turn_text(turn: LocomoTurn, with_speaker: bool = True) -> str:
     if "blip_caption" in turn:
         text = f"[Image: {turn['blip_caption']}] {text}"
     return f"{turn['speaker']}: {text}" if with_speaker else text
+
+
+def session_time(session: Session) -> datetime:
+    """The moment the session starts. LoCoMo dates sessions, not turns, so every turn of a session gets it."""
+    return datetime.strptime(session.date_time, _SESSION_TIME_FORMAT)

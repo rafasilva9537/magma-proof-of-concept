@@ -132,6 +132,11 @@ class LLMConfig:
     temperature: float = 0.0
     seed: int = 42
     max_output_tokens: int = 1024
+    # A failed call (provider down, timeout, empty or cut reply) is retried with a doubling wait, about
+    # five minutes in total; then the run stops, so no result is ever built on a missing answer.
+    max_attempts: int = 7
+    first_retry_delay_s: float = 5.0
+    request_timeout_s: float = 300.0
 
 
 @dataclass(frozen=True)
@@ -172,8 +177,12 @@ class IngestConfig:
     # between turns of one conversation. The 0.10-0.30 of Tab. 6 is for MiniLM and does not transfer.
     semantic_edge_threshold: float = 0.75
     semantic_edge_max_neighbors: int = 5
+    # δ: a CAUSES edge is kept when the confidence given by the LLM is above it. The paper gives no value.
     causal_min_confidence: float = 0.5
     neighborhood_hops: int = 2
+    # Earlier events of the neighborhood shown to the causal prompt. None shows all of them, as Alg. 3 does;
+    # through a frequent entity the 2-hop neighborhood can reach most of the conversation.
+    causal_candidate_limit: int | None = None
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+from magma.config import DEFAULT
 from magma.llm import (
     ChatRequest,
     ClientSettings,
@@ -11,7 +12,10 @@ from magma.llm import (
     ContextWindowExceeded,
     InvalidStructuredOutput,
     LLMClient,
+    LLMUnavailable,
     Message,
+    ReplyCutByTokenLimit,
+    TransientBackendError,
 )
 
 
@@ -139,3 +143,73 @@ def test_settings_require_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NOPE_MODEL", raising=False)
     with pytest.raises(RuntimeError):
         ClientSettings.from_env("NOPE")
+
+
+class FlakyBackend:
+    """Plays a script of outcomes: a completion is returned, an exception is raised."""
+
+    def __init__(self, outcomes: list[Completion | Exception]):
+        self.outcomes = list(outcomes)
+        self.requests: list[ChatRequest] = []
+
+    def complete(self, request: ChatRequest) -> Completion:
+        self.requests.append(request)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def good(text: str = "hi") -> Completion:
+    return Completion(text=text, prompt_tokens=10, completion_tokens=5, reasoning_tokens=0, provider="Prov", model="m-2026")
+
+
+def flaky_client(tmp_path: Path, outcomes: list[Completion | Exception]) -> tuple[LLMClient, FlakyBackend, list[float]]:
+    backend = FlakyBackend(outcomes)
+    waits: list[float] = []
+    client = LLMClient(
+        ClientSettings(model="test-model"),
+        backend=backend,
+        cache_dir=tmp_path / "cache",
+        log_path=tmp_path / "llm_calls.jsonl",
+        sleep=waits.append,
+    )
+    return client, backend, waits
+
+
+def test_failed_attempts_are_retried_with_a_doubling_wait(tmp_path: Path) -> None:
+    llm, backend, waits = flaky_client(tmp_path, [TransientBackendError("503"), TransientBackendError("timeout"), good()])
+    result = llm.chat(MSG)
+    assert (result.text, result.attempts, result.provider, result.model) == ("hi", 3, "Prov", "m-2026")
+    first = DEFAULT.llm.first_retry_delay_s
+    assert waits == [first, 2 * first]
+    logged = json.loads((tmp_path / "llm_calls.jsonl").read_text(encoding="utf-8"))
+    assert (logged["response"]["provider"], logged["response"]["attempts"]) == ("Prov", 3)
+
+
+def test_empty_or_unfinished_reply_is_retried_and_never_cached(tmp_path: Path) -> None:
+    empty = Completion(text="  ", prompt_tokens=10, completion_tokens=0, reasoning_tokens=0)
+    broken = Completion(text="{", prompt_tokens=10, completion_tokens=1, reasoning_tokens=0, finish_reason="error")
+    llm, backend, _ = flaky_client(tmp_path, [empty, broken, good("ok")])
+    assert llm.chat(MSG).text == "ok"
+    again, other, _ = flaky_client(tmp_path, [])
+    assert again.chat(MSG).text == "ok"  # only the good reply reached the cache
+    assert other.requests == []
+
+
+def test_run_stops_when_every_attempt_fails(tmp_path: Path) -> None:
+    attempts = DEFAULT.llm.max_attempts
+    llm, backend, waits = flaky_client(tmp_path, [TransientBackendError("down")] * attempts)
+    with pytest.raises(LLMUnavailable):
+        llm.chat(MSG)
+    assert len(backend.requests) == attempts
+    assert len(waits) == attempts - 1
+    assert not (tmp_path / "cache").exists()
+
+
+def test_reply_cut_by_the_token_limit_stops_at_once(tmp_path: Path) -> None:
+    cut = Completion(text='{"a": ', prompt_tokens=10, completion_tokens=1024, reasoning_tokens=0, finish_reason="length")
+    llm, backend, waits = flaky_client(tmp_path, [cut])
+    with pytest.raises(ReplyCutByTokenLimit):
+        llm.chat(MSG)
+    assert (len(backend.requests), waits) == (1, [])

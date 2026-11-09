@@ -1,7 +1,9 @@
 """Client for any OpenAI-compatible chat endpoint.
 
 Every call is cached on disk and appended, raw, to a JSONL log, so results can
-be audited and metrics recomputed without calling the model again.
+be audited and metrics recomputed without calling the model again. A call that
+fails (provider down, timeout, empty or cut reply) is retried and never cached;
+if it keeps failing, the client raises and the run stops.
 """
 
 from __future__ import annotations
@@ -12,12 +14,13 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generic, Literal, NotRequired, Protocol, TypedDict, TypeVar
 
 import tiktoken
-from openai import OpenAI, omit
+from openai import APIConnectionError, InternalServerError, OpenAI, RateLimitError, omit
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, ValidationError
 
@@ -52,6 +55,9 @@ class Completion:
     prompt_tokens: int
     completion_tokens: int
     reasoning_tokens: int
+    finish_reason: str | None = "stop"
+    provider: str | None = None  # who served it, when a gateway routes between providers (OpenRouter)
+    model: str | None = None  # the model id the server reports, e.g. with its dated variant
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,10 @@ class LLMResult:
     reasoning_tokens: int
     latency_s: float
     cached: bool
+    finish_reason: str | None = "stop"
+    provider: str | None = None
+    model: str | None = None
+    attempts: int = 1  # 0 when served from the cache
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -107,33 +117,54 @@ class InvalidStructuredOutput(ValueError):
     pass
 
 
+class TransientBackendError(RuntimeError):
+    """The call failed for a reason worth retrying: the provider is down, slow, rate limiting, or sent no usable reply."""
+
+
+class ReplyCutByTokenLimit(RuntimeError):
+    """The reply hit max_tokens: a configuration problem that retrying would only repeat."""
+
+
+class LLMUnavailable(RuntimeError):
+    """Every attempt failed. The run has to stop: going on would build results on a missing answer."""
+
+
 class ChatBackend(Protocol):
     def complete(self, request: ChatRequest) -> Completion: ...
 
 
 class OpenAIBackend:
-    """Sends requests through the official `openai` SDK."""
+    """Sends requests through the official `openai` SDK. Retries are left to LLMClient, so there is one retry policy."""
 
-    def __init__(self, api_key: str | None, base_url: str | None):
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+    def __init__(self, api_key: str | None, base_url: str | None, timeout_s: float):
+        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_s, max_retries=0)
 
     def complete(self, request: ChatRequest) -> Completion:
-        response = self._client.chat.completions.create(
-            model=request["model"],
-            messages=[_to_sdk_message(m) for m in request["messages"]],
-            temperature=request["temperature"],
-            seed=request["seed"],
-            max_tokens=request["max_tokens"],
-            response_format={"type": "json_object"} if "response_format" in request else omit,
-            extra_body=request.get("extra_body"),
-        )
+        try:
+            response = self._client.chat.completions.create(
+                model=request["model"],
+                messages=[_to_sdk_message(m) for m in request["messages"]],
+                temperature=request["temperature"],
+                seed=request["seed"],
+                max_tokens=request["max_tokens"],
+                response_format={"type": "json_object"} if "response_format" in request else omit,
+                extra_body=request.get("extra_body"),
+            )
+        except (APIConnectionError, RateLimitError, InternalServerError) as error:  # timeouts are connection errors
+            raise TransientBackendError(str(error)) from error
+        if not response.choices:
+            raise TransientBackendError("the server returned no choices")
         usage = response.usage
         details = usage.completion_tokens_details if usage else None
+        provider = (response.model_extra or {}).get("provider")
         return Completion(
             text=response.choices[0].message.content or "",
             prompt_tokens=usage.prompt_tokens if usage else 0,
             completion_tokens=usage.completion_tokens if usage else 0,
             reasoning_tokens=(details.reasoning_tokens or 0) if details else 0,
+            finish_reason=response.choices[0].finish_reason,
+            provider=provider if isinstance(provider, str) else None,
+            model=response.model,
         )
 
 
@@ -194,12 +225,14 @@ class LLMClient:
         cache_dir: Path | None = Path(".cache/llm"),
         log_path: Path | None = None,
         config: LLMConfig = DEFAULT.llm,
+        sleep: Callable[[float], None] = time.sleep,  # replaced in tests, so retries do not wait
     ):
         self.settings = settings
-        self.backend = backend or OpenAIBackend(settings.api_key, settings.base_url)
+        self.backend = backend or OpenAIBackend(settings.api_key, settings.base_url, config.request_timeout_s)
         self.cache_dir = cache_dir
         self.log_path = log_path
         self.config = config
+        self._sleep = sleep
         self.usage: dict[str, Usage] = {}
         self._lock = threading.Lock()
 
@@ -254,21 +287,41 @@ class LLMClient:
         key = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         result = self._cache_get(key)
         if result is None:
+            result = self._call_with_retries(request, tag)
+            self._cache_put(key, result)
+        with self._lock:
+            self.usage.setdefault(tag, Usage()).add(result)
+            self._log(key, tag, request, result)
+        return result
+
+    def _call_with_retries(self, request: ChatRequest, tag: str) -> LLMResult:
+        """Only a complete reply is returned (and then cached); a failed attempt is retried after a doubling wait."""
+        delay = self.config.first_retry_delay_s
+        failures: list[str] = []
+        for attempt in range(1, self.config.max_attempts + 1):
             start = time.perf_counter()
-            completion = self.backend.complete(request)
-            result = LLMResult(
+            try:
+                completion = self.backend.complete(request)
+                _check_usable(completion)
+            except TransientBackendError as error:
+                failures.append(f"attempt {attempt}: {error}")
+                if attempt < self.config.max_attempts:
+                    self._sleep(delay)
+                    delay *= 2
+                continue
+            return LLMResult(
                 text=completion.text,
                 prompt_tokens=completion.prompt_tokens,
                 completion_tokens=completion.completion_tokens,
                 reasoning_tokens=completion.reasoning_tokens,
                 latency_s=time.perf_counter() - start,
                 cached=False,
+                finish_reason=completion.finish_reason,
+                provider=completion.provider,
+                model=completion.model,
+                attempts=attempt,
             )
-            self._cache_put(key, result)
-        with self._lock:
-            self.usage.setdefault(tag, Usage()).add(result)
-            self._log(key, tag, request, result)
-        return result
+        raise LLMUnavailable(f"[{tag}] no usable reply after {self.config.max_attempts} attempts: " + "; ".join(failures))
 
     def _cache_path(self, key: str) -> Path | None:
         if self.cache_dir is None:
@@ -287,6 +340,10 @@ class LLMClient:
             reasoning_tokens=entry.reasoning_tokens,
             latency_s=entry.latency_s,
             cached=True,
+            finish_reason=entry.finish_reason,
+            provider=entry.provider,
+            model=entry.model,
+            attempts=0,
         )
 
     def _cache_put(self, key: str, result: LLMResult) -> None:
@@ -299,6 +356,9 @@ class LLMClient:
             completion_tokens=result.completion_tokens,
             reasoning_tokens=result.reasoning_tokens,
             latency_s=result.latency_s,
+            finish_reason=result.finish_reason,
+            provider=result.provider,
+            model=result.model,
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
@@ -320,6 +380,10 @@ class LLMClient:
                 "reasoning_tokens": result.reasoning_tokens,
                 "latency_s": result.latency_s,
                 "cached": result.cached,
+                "finish_reason": result.finish_reason,
+                "provider": result.provider,
+                "model": result.model,
+                "attempts": result.attempts,
             },
         }
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -333,6 +397,9 @@ class CacheEntry(BaseModel):
     completion_tokens: int
     reasoning_tokens: int
     latency_s: float
+    finish_reason: str | None = "stop"
+    provider: str | None = None
+    model: str | None = None
 
 
 class LoggedResponse(TypedDict):
@@ -342,6 +409,10 @@ class LoggedResponse(TypedDict):
     reasoning_tokens: int
     latency_s: float
     cached: bool
+    finish_reason: str | None
+    provider: str | None
+    model: str | None
+    attempts: int
 
 
 class LogRecord(TypedDict):
@@ -350,6 +421,24 @@ class LogRecord(TypedDict):
     key: str
     request: ChatRequest
     response: LoggedResponse
+
+
+def _check_usable(completion: Completion) -> None:
+    """A reply that did not finish normally is not an answer, and is never cached.
+
+    A reply cut by the token limit would be cut again on every attempt, so it stops the run at
+    once; any other unfinished or empty reply is a provider failure, worth retrying.
+    """
+    if completion.finish_reason == TOKEN_LIMIT_FINISH_REASON:
+        raise ReplyCutByTokenLimit(f"the reply hit max_tokens after {completion.completion_tokens} tokens; raise the limit")
+    if completion.finish_reason != COMPLETE_FINISH_REASON:
+        raise TransientBackendError(f"reply ended with finish_reason={completion.finish_reason!r}")
+    if not completion.text.strip():
+        raise TransientBackendError("the reply is empty")
+
+
+COMPLETE_FINISH_REASON = "stop"
+TOKEN_LIMIT_FINISH_REASON = "length"
 
 
 def _parse(text: str, schema: type[T], tag: str) -> T:

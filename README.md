@@ -40,7 +40,13 @@ Reimplementação do MAGMA (*Multi-Graph based Agentic Memory Architecture*, Jia
 4. Configure os modelos de linguagem: copie `.env.example` para `.env` e preencha chave, URL e modelo do LLM principal (`LLM_*`), do juiz (`JUDGE_*`) e do segundo juiz (`JUDGE2_*`). Qualquer endpoint compatível com a API da OpenAI funciona. O `.env` nunca é versionado.
 
    - `*_CONTEXT_WINDOW`: janela do modelo em tokens; prompts maiores são recusados antes do envio.
-   - `*_EXTRA_BODY`: JSON enviado em toda requisição, ex.: `{"provider": {"order": ["..."], "allow_fallbacks": false}, "reasoning": {"enabled": false}}` no OpenRouter.
+   - `*_EXTRA_BODY`: JSON enviado em toda requisição. No OpenRouter, fixe **um único provedor**, sem fallback, e exija que ele respeite os parâmetros (`response_format`, `seed`): `{"provider": {"order": ["<provedor>"], "allow_fallbacks": false, "require_parameters": true}, "reasoning": {"enabled": false}}`. Sem isso, o mesmo modelo pode ser servido por provedores com quantizações diferentes no mesmo run. O provedor que atendeu cada chamada fica no log (`llm_calls.jsonl`).
+
+5. Teste com uma conversa curta antes de um run grande (piloto barato, ~50 turnos do LoCoMo; as chamadas ficam no cache e são reaproveitadas depois):
+
+   ```bash
+   python -m bench.measure_consolidation --locomo MAGMA-original-repo/data/locomo10.json --sample conv-26 --max-turns 50
+   ```
 
 ## Verificação
 
