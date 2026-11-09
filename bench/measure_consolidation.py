@@ -318,10 +318,13 @@ def main() -> None:
     parser.add_argument("--sample-size", type=int, default=15, help="causal edges kept for checking by hand")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output-dir", type=Path, default=Path("runs/measurements/consolidation"))
+    parser.add_argument("--label", default=None, help="suffix of the run folder, e.g. the LLM settings being compared")
     arguments = parser.parse_args()
 
     load_dotenv()
     run_name = arguments.sample if arguments.max_turns is None else f"{arguments.sample}-first-{arguments.max_turns}"
+    if arguments.label:
+        run_name = f"{run_name}-{arguments.label}"
     output = arguments.output_dir / run_name
     output.mkdir(parents=True, exist_ok=True)
     log_path = output / "llm_calls.jsonl"

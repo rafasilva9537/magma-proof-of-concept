@@ -6,7 +6,7 @@
 > **Status:** análise concluída. **Decisão principal:** reimplementar o MAGMA do zero, fiel ao artigo (§5).
 > **Decididas (todas):** D1 (benchmarks por requisito; modos `sample` e `report`), D2 (router determinístico), D3 (GLM 5.3 Flash + juízes de outra família), D4 (baselines), D5 (inglês), D6 (sem framework de LLM), D7 (FAISS exato), D8 (Qwen3-Embedding-0.6B), D9 (perfil `narrative`). Premissa da avaliação: comparação controlada entre as implementações do projeto; o artigo é referência (D1).
 > **A verificar na implementação:** se o canal temporal do RRF usa só o τ ou também as `dates_mentioned` (uma claim que cita outro momento herda o τ do evento de fala); se o LongMemEval-KU entra no RF3 (D1).
-> **Próximo passo:** commits 1–10 do plano (§10.2) implementados; segue o commit 11 (router). Em aberto antes dos runs com o LLM real: provedor e nível de raciocínio do LLM principal (D3).
+> **Próximo passo:** commits 1–10 do plano (§10.2) implementados; segue o commit 11 (router). Em aberto antes dos runs completos: o provedor do LLM principal (D3).
 > **Regra da §9:** toda decisão registra recomendação, justificativa, alternativas comparadas e por que cada uma foi descartada (material direto para o artigo). Sem tom de roteiro de apresentação.
 > **Regra de escopo (PoC):** implementar tudo o que o artigo descreve e tudo o que a extensão exige; só otimizações e extras vão para a §12.
 >
@@ -577,8 +577,9 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
   - **LLM principal:** **GLM 5.3 Flash** (remoto, via OpenRouter) para extração, NLI, agentes e QA, em todas as arquiteturas e nos dois modos do runner.
   - **Juiz principal:** **DeepSeek V4 Flash** (outra família), com o prompt C.3 do artigo.
   - **Segundo juiz:** **Gemini 3.8 Flash** (Vertex AI) rejulga uma amostra estratificada de ~500 itens; a concordância entre os juízes (κ de Cohen) é reportada.
-  - **Configuração:** variante datada do modelo fixada; provedor fixo, sem fallback; raciocínio (*thinking*) desligado ou limitado, com os tokens de raciocínio contabilizados; `temperature=0`; `seed` quando o provedor aceitar. Toda chamada é gravada e cacheada (D6), o que mantém os runs reprodutíveis mesmo se o provedor mudar o modelo.
-  - **Em aberto:** qual provedor do OpenRouter (o mesmo modelo é servido por dezenas de provedores, com quantizações, preços e qualidade diferentes, e o roteamento padrão os mistura) e o nível de raciocínio.
+  - **Configuração:** variante datada do modelo fixada; provedor fixo, sem fallback; raciocínio (*thinking*) com esforço `medium`, igual em todas as arquiteturas, com os tokens de raciocínio contabilizados e o limite de saída (16384 tokens) folgado para eles; `temperature=0`; `seed` quando o provedor aceitar. Toda chamada é gravada e cacheada (D6), o que mantém os runs reprodutíveis mesmo se o provedor mudar o modelo.
+  - **Raciocínio `medium`:** o uso atual de LLMs é quase sempre com raciocínio, e `medium` é o padrão comum das APIs com nível de esforço; avaliar a memória sem ele mediria uma situação pouco realista, e um modelo mais fraco que os de ponta depende mais do raciocínio. O que garante a comparação é o esforço ser fixo e igual para todas as arquiteturas. Descartados: desligado (recomendação inicial, por fidelidade ao gpt-4o-mini do artigo; menos realista) e `low`. **A confirmar:** no provedor em uso, `low` e `medium` geraram ambos ~1 token de raciocínio por chamada (mediana), então ainda não está claro se o esforço pedido é aplicado.
+  - **Em aberto:** qual provedor do OpenRouter (o mesmo modelo é servido por dezenas de provedores, com quantizações, preços e qualidade diferentes, e o roteamento padrão os mistura).
   - **Por quê:** modelo atual, de boa qualidade e custo baixo por token, acessível por endpoint OpenAI-compatível; juiz de outra família evita viés de autopreferência (Panickssery et al., 2024); o segundo juiz valida o primeiro.
   - **Alternativas equiparáveis:** DeepSeek V4 Flash ou Gemini 3.8 Flash como LLM principal, trocando de papel com o juiz e mantendo famílias diferentes entre gerador e juiz.
   - **Descartados:**

@@ -131,7 +131,9 @@ class ChannelWeights:
 class LLMConfig:
     temperature: float = 0.0
     seed: int = 42
-    max_output_tokens: int = 1024
+    # A ceiling, not a cost: only generated tokens are paid. It must fit reasoning tokens (counted inside the limit
+    # on OpenRouter) and long cause lists, because a reply cut by the limit stops the run.
+    max_output_tokens: int = 16384
     # A failed call (provider down, timeout, empty or cut reply) is retried with a doubling wait, about
     # five minutes in total; then the run stops, so no result is ever built on a missing answer.
     max_attempts: int = 7
