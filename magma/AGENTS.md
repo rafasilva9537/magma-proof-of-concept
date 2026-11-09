@@ -57,3 +57,12 @@ Todo código é tipado e passa no `mypy` (configuração em `mypy.ini`).
 - Cada módulo tem testes em `tests/`, sem chamadas reais a APIs (use dublês que implementam a mesma interface).
 - Testes de algoritmo usam grafos pequenos montados à mão, com o resultado esperado calculado no próprio teste ou num comentário.
 - `pytest` e `mypy` passam antes de cada commit.
+
+## 6. Medições
+Todo número que justifica uma decisão ou entra num resultado (calibração, medição, comparação, benchmark) sai de um script versionado. Um número que nenhum comando do repositório reproduz não é usado.
+
+- O script fica em `bench/`, roda com `python -m bench.<nome>` e tem testes em `tests/`.
+- A docstring do módulo diz o que é medido e traz o comando que reproduz a medição.
+- Dados de entrada, amostras e sementes são argumentos de linha de comando com valor padrão, para que o mesmo comando dê o mesmo número.
+- Os dados brutos vão para `runs/` (fora do git) em JSON; a tela mostra só o resumo.
+- Nada de script avulso fora do repositório, nem para uma medição rápida: se o número vai ser usado, o script entra no código.
