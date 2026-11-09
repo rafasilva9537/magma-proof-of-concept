@@ -6,7 +6,7 @@
 > **Status:** análise concluída. **Decisão principal:** reimplementar o MAGMA do zero, fiel ao artigo (§5).
 > **Decididas (todas):** D1 (benchmarks por requisito; modos `sample` e `report`), D2 (router determinístico), D3 (GLM 5.3 Flash + juízes de outra família), D4 (baselines), D5 (inglês), D6 (sem framework de LLM), D7 (FAISS exato), D8 (Qwen3-Embedding-0.6B), D9 (perfil `narrative`). Premissa da avaliação: comparação controlada entre as implementações do projeto; o artigo é referência (D1).
 > **A verificar na implementação:** se o canal temporal do RRF usa só o τ ou também as `dates_mentioned` (uma claim que cita outro momento herda o τ do evento de fala); se o LongMemEval-KU entra no RF3 (D1).
-> **Próximo passo:** commits 1–10 do plano (§10.2) implementados; segue o commit 11 (router). Em aberto antes dos runs completos: o provedor do LLM principal (D3).
+> **Próximo passo:** commits 1–10 do plano (§10.2) implementados; segue o commit 11 (router). O plano foi reagrupado de 42 para 26 commits, com o runner antes da recuperação. Em aberto até o portão de custo do commit 15: a forma de conter o custo da ingestão, o provedor do LLM principal (D3) e a construção em paralelo.
 > **Regra da §9:** toda decisão registra recomendação, justificativa, alternativas comparadas e por que cada uma foi descartada (material direto para o artigo). Sem tom de roteiro de apresentação.
 > **Regra de escopo (PoC):** implementar tudo o que o artigo descreve e tudo o que a extensão exige; só otimizações e extras vão para a §12.
 >
@@ -773,54 +773,60 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
 - **Cada commit traz os seus testes** e deixa a suíte passando.
 
 ### 10.2 Plano de commits
-| # | Milestone | Mensagem | Escopo | Referência |
-|---|---|---|---|---|
-| 1 | M0 | `Add project scaffolding` | `requirements.txt`, `pytest.ini`, pacotes `magma/`, `bench/`, `baselines/`, `tests/`, `.env.example` | §6.2 |
-| 2 | M0 | `Add config module` | `config.py`: Tab. 6 + escolhas da §6.4 + flags de ablação | §1.5, §6.4 |
-| 3 | M0 | `Implement LLM client with cache and usage log` | `llm.py`: endpoint OpenAI-compatível, cache em disco, `llm_calls.jsonl`, contadores (entrada, saída, raciocínio), checagem de janela | D3, D6 |
-| 4 | M0 | `Wrap embedding model` | `embed.py`: Qwen3-Embedding, instrução só na query, vetores normalizados, aviso de corte | D8 |
-| 5 | M1 | `Add type registry with magma profile` | `schema.py`: declaração de nós e arestas, camadas, produtores, efeitos; perfil `magma` | D9 |
-| 6 | M1 | `Implement typed multigraph with JSON persistence` | `graph.py`: `Node`, `Edge`, `MultiDiGraph`, validação contra o perfil, save/load | §1.2, §6.2 |
-| 7 | M1 | `Add vector and BM25 indexes` | `index.py`: FAISS `IndexFlatIP` + BM25, ambos com máscara de visibilidade | D7, §1.3 |
-| 8 | M1 | `Add temporal tagger` | `temporal.py`: `dateparser` com data-base do evento; janela `[τs, τe]` | §1.3, §6.2 |
-| 9 | M1 | `Implement fast path ingestion` | `ingest.py`: Alg. 2 (evento, `TEMPORAL`, embedding, BM25, `SEMANTIC`, fila) | §1.4, §6.3 |
-| 10 | M1 | `Implement slow path consolidation` | `ingest.py`: Alg. 3, prompt C.1, entidades e `ENTITY`, datas, `CAUSAL` com δ | §1.4, §6.3 |
-| 11 | M1 | `Route queries by intent` | `router.py`: palavras-chave + protótipos, janela temporal, `v_q`, `q_key` | D2 |
-| 12 | M1 | `Select anchors with reciprocal rank fusion` | `retrieve.py`: Stage 2 (Eq. 4), agregação de facetas por âncora | §1.3, D9 |
-| 13 | M1 | `Implement heuristic beam search` | `retrieve.py`: Stage 3 (Alg. 1, Eqs. 5–6) | §1.3, §6.4 |
-| 14 | M1 | `Linearize subgraph within token budget` | `retrieve.py`: Stage 4 (ordenação, Eq. 7, budgeting) | §1.3 |
-| 15 | M1 | `Add adaptive QA prompt` | `qa.py`: prompt C.2 com instrução dinâmica do router | §1.6, §6.4 |
-| 16 | M1 | `Expose memory facade with background consolidation` | `memory.py`: `add_turn`, `consolidate(drain)`, `query`; thread real | §6.3 |
-| 17 | M1 | `Add interactive console` | `cli.py`: `chat`, `ingest`, `ask`, `/why` com o rastreamento da consulta, `--script` | §6.3 |
-| 18 | M2 | `Build benchmark runner with sample and report modes` | `bench/runner.py`: amostragem estratificada com seed, piloto de custo, teto, `results/<run_id>/` | D1 |
-| 19 | M2 | `Add LoCoMo adapter` | `bench/adapters/locomo.py`: conversas, timestamps, perguntas e categorias | D1 |
-| 20 | M2 | `Add LLM judge` | `bench/judge.py`: prompt C.3, juiz configurável | D3, §1.6 |
-| 21 | M2 | `Support paper ablations` | flags das Tabs. 4 e 5, aplicadas na consulta | §6.5 |
-| 22 | M2 | `Measure build time, tokens and latency` | tempo de build, tokens/query, latência (Tab. 3) | §6.5, §8.4 |
-| 23 | M2 | `Freeze original architecture with regression snapshot` | `tests/regression/`: saída da recuperação (intenção, âncoras, caminhos, contexto, prompt) gravada para uma conversa fixa e uma amostra fixa do LoCoMo, com o LLM do cache; tag `v-original` | §10.1 |
-| 24 | M4 | `Add narrative type profiles` | `narrative/schema.py`: perfis `narrative` e `narrative-min` | D9, §7.2 |
-| 25 | M4 | `Tag visibility from scene and split action from speech` | fast path: `visible_to` pelo metadado de cena, `action_text`/`speech_text`, `MENTIONS{actor}` | §7.3 |
-| 26 | M4 | `Extract claims and entity roles` | slow path: C.1 estendido (claims com `type`, papéis), `STATED`, `MENTIONS{role}` | §7.3, D9 |
-| 27 | M4 | `Detect contradictions and update claim status` | NLI, regra `INVALIDATES`/`CONTRADICTS`/`SUPERSEDES`, `SUPPORTS`, status | §7.3, D9 |
-| 28 | M4 | `Scope retrieval to the viewer` | `query(q, viewer)`, filtro duro, `status_for(viewer)` | §7.4 |
-| 29 | M4 | `Add narrative linearization` | seções "presenciou" e "foi dito", regras de impressão do status | §7.4 |
-| 30 | M4 | `Add narrative ablations` | B − visibilidade, B − status, B − contradição, `narrative-min` | §7.6 |
-| 31 | M4 | `Add persona agent prompt` | `narrative/agents.py`: prompt de persona (identidade, relações, objetivos, segredos) + memória do viewer + últimos K turnos → `*ação* "fala"`; usado pelas sondas | §7.5, §8.5 |
-| 32 | M4 | `Add live orchestrator` | `narrative/orchestrator.py`: laço de turnos (quem fala, gera, ingere) | §7.5 |
-| 33 | M3 | `Add diagnostic scenario and loader` | formato da §8.3, cenário Épsilon-4, gabarito, sondas | §8.3, D1 |
-| 34 | M4 | `Add narrative console` | `narrative/cli.py`: `play` com `--until` e `--as`; `/scene`, `/narrate`, `/auto`, `/ask`, `/memory` | §7.5 |
-| 35 | M3 | `Add FANToM adapter` | `present` pelas entradas e saídas; perguntas fechadas | D1 |
-| 36 | M3 | `Add FactConsolidation adapter` | fatos como turnos de narração; métrica oficial | D1 |
-| 37 | M5 | `Add full context baseline` | C1 | §8.5 |
-| 38 | M5 | `Add naive RAG baseline` | C2 (LlamaIndex só para indexar e recuperar) | D4, D6 |
-| 39 | M6 | `Add narrative metrics` | RLR, ELR, DCR, FUD, CIA, Contradiction F1, acurácia do router | §8.4 |
-| 40 | M6 | `Measure agreement with a second judge` | rejulgamento de amostra, κ de Cohen | D3 |
-| 41 | M6 | `Compute statistics and result tables` | bootstrap, McNemar, permutação, tabelas e gráficos | §8.4 |
-| 42 | M7 | `Add LongMemEval-KU adapter` | opcional, se aprovado na implementação | D1 |
+Os commits 1–10 seguiram o plano original. A partir do 11, commits do mesmo assunto foram agrupados (o plano tinha 42) e a ordem foi refeita para que as execuções com o LLM rodem enquanto o commit seguinte é escrito (coluna "Libera").
 
-Os commits 33, 35 e 36 (cenário e adaptadores) não dependem de `narrative/` e podem vir antes dos 24–32. O 34 (console narrativo) depende do orquestrador (32) e do loader de cenário (33).
+| # | Milestone | Mensagem | Escopo | Libera | Referência |
+|---|---|---|---|---|---|
+| 1 | M0 | `Add project scaffolding` | `requirements.txt`, `pytest.ini`, pacotes `magma/`, `bench/`, `baselines/`, `tests/`, `.env.example` | — | §6.2 |
+| 2 | M0 | `Add config module` | `config.py`: Tab. 6 + escolhas da §6.4 + flags de ablação | — | §1.5, §6.4 |
+| 3 | M0 | `Implement LLM client with cache and usage log` | `llm.py`: endpoint OpenAI-compatível, cache em disco, `llm_calls.jsonl`, contadores (entrada, saída, raciocínio), checagem de janela | — | D3, D6 |
+| 4 | M0 | `Wrap embedding model` | `embed.py`: Qwen3-Embedding, instrução só na query, vetores normalizados, aviso de corte | — | D8 |
+| 5 | M1 | `Add type registry with magma profile` | `schema.py`: declaração de nós e arestas, camadas, produtores, efeitos; perfil `magma` | — | D9 |
+| 6 | M1 | `Implement typed multigraph with JSON persistence` | `graph.py`: `Node`, `Edge`, `MultiDiGraph`, validação contra o perfil, save/load | — | §1.2, §6.2 |
+| 7 | M1 | `Add vector and BM25 indexes` | `index.py`: FAISS `IndexFlatIP` + BM25, ambos com máscara de visibilidade | — | D7, §1.3 |
+| 8 | M1 | `Add temporal tagger` | `temporal.py`: `dateparser` com data-base do evento; janela `[τs, τe]` | — | §1.3, §6.2 |
+| 9 | M1 | `Implement fast path ingestion` | `ingest.py`: Alg. 2 (evento, `TEMPORAL`, embedding, BM25, `SEMANTIC`, fila) | — | §1.4, §6.3 |
+| 10 | M1 | `Implement slow path consolidation` | `ingest.py`: Alg. 3, prompt C.1, entidades e `ENTITY`, datas, `CAUSAL` com δ | — | §1.4, §6.3 |
+| 11 | M1 | `Route queries by intent` | `router.py`: classificador de intenção, janela temporal, `v_q`, `q_key` | — | D2 |
+| 12 | M2 | `Build LoCoMo runner with judge and cost metrics` | `bench/runner.py`: amostragem estratificada com seed, modos `sample`/`report`, piloto de custo, teto, `results/<run_id>/`, modo só de construção do grafo; adaptador do LoCoMo (conversas, timestamps, perguntas, categorias); juiz C.3 configurável; tempo de build, tokens/query e latência (Tab. 3). Tudo contra a ABC `MemorySystem` (`add_turn`, `consolidate`, `query`), testada com um dublê | construção do grafo de **uma** conversa do LoCoMo (a menor) | D1, D3, §1.6, §6.5, §8.4 |
+| 13 | M1 | `Implement retrieval stages with paper ablations` | `retrieve.py`: Stage 2 (Eq. 4, agregação de facetas por âncora), Stage 3 (Alg. 1, Eqs. 5–6) e Stage 4 (ordenação, Eq. 7, budgeting); flags das Tabs. 4 e 5 aplicadas em cada estágio, na consulta | — | §1.3, §6.4, §6.5, D9 |
+| 14 | M1 | `Expose memory facade with adaptive QA` | `qa.py`: prompt C.2 com instrução dinâmica do router; `memory.py`: implementação de `MemorySystem` com `add_turn`, `consolidate(drain)`, `query`; thread real | run `sample` na conversa já construída | §1.6, §6.3, §6.4 |
+| 15 | M2 | `Freeze original architecture with regression snapshot` | `tests/regression/`: saída da recuperação (intenção, âncoras, caminhos, contexto, prompt) gravada para a conversa fixa e uma amostra fixa do LoCoMo, com o LLM do cache; tag `v-original` | **portão de custo** (abaixo); depois, construção das demais conversas e run `report` | §10.1 |
+| 16 | M5 | `Add full context and naive RAG baselines` | C1 (transcrição visível inteira) e C2 (LlamaIndex só para indexar e recuperar), com o mesmo prompt de resposta | runs C1 e C2 | §8.5, D4, D6 |
+| 17 | M4 | `Add narrative profile and ingestion` | `narrative/schema.py`: perfis `narrative` e `narrative-min`; fast path: `visible_to` pelo metadado de cena, `action_text`/`speech_text`, `MENTIONS{actor}`; slow path: C.1 estendido (claims com `type`, papéis), `STATED`, `MENTIONS{role}` | — | D9, §7.2, §7.3 |
+| 18 | M4 | `Detect contradictions and update claim status` | NLI, regra `INVALIDATES`/`CONTRADICTS`/`SUPERSEDES`, `SUPPORTS`, status | construção dos grafos da Arquitetura B | §7.3, D9 |
+| 19 | M4 | `Scope retrieval and linearization to the viewer` | `query(q, viewer)`, filtro duro, `status_for(viewer)`; seções "presenciou" e "foi dito", regras de impressão do status; ablações B − visibilidade, B − status, B − contradição, `narrative-min` | runs E e ablações da narrativa | §7.4, §7.6 |
+| 20 | M4 | `Add persona agent prompt` | `narrative/agents.py`: prompt de persona (identidade, relações, objetivos, segredos) + memória do viewer + últimos K turnos → `*ação* "fala"`; usado pelas sondas | — | §7.5, §8.5 |
+| 21 | M3 | `Add diagnostic scenario and loader` | formato da §8.3, cenário Épsilon-4, gabarito, sondas | runs das sondas | §8.3, D1 |
+| 22 | M6 | `Add narrative metrics, judge agreement and statistics` | RLR, ELR, DCR, FUD, CIA, Contradiction F1, acurácia do router; rejulgamento de amostra pelo segundo juiz, κ de Cohen; bootstrap, McNemar, permutação, tabelas e gráficos | tabelas de resultados | §8.4, D3 |
+| 23 | M3 | `Add FANToM and FactConsolidation adapters` | FANToM: `present` pelas entradas e saídas, perguntas fechadas; FactConsolidation: fatos como turnos de narração, métrica oficial | runs nos dois benchmarks | D1 |
+| 24 | M1 | `Add interactive console` | `cli.py`: `chat`, `ingest`, `ask`, `/why` com o rastreamento da consulta, `--script` | — | §6.3 |
+| 25 | M4 | `Add live orchestrator and narrative console` | `narrative/orchestrator.py`: laço de turnos (quem fala, gera, ingere); `narrative/cli.py`: `play` com `--until` e `--as`; `/scene`, `/narrate`, `/auto`, `/ask`, `/memory` | — | §7.5 |
+| 26 | M7 | `Add LongMemEval-KU adapter` | opcional, se aprovado na implementação | — | D1 |
 
-**Gargalo esperado:** inferência na ingestão (2 chamadas LLM por turno na Arquitetura A; 2–3 na Arquitetura B). As execuções de benchmark rodam em background enquanto o resto é implementado; o cache evita repetir chamadas.
+Correspondência com o plano anterior (42 commits): 11 → 11; 18 + 19 + 20 + 22 → 12; 12 + 13 + 14 + 21 → 13; 15 + 16 → 14; 23 → 15; 37 + 38 → 16; 24 + 25 + 26 → 17; 27 → 18; 28 + 29 + 30 → 19; 31 → 20; 33 → 21; 39 + 40 + 41 → 22; 35 + 36 → 23; 17 → 24; 32 + 34 → 25; 42 → 26.
+
+**Por que esta ordem:**
+- A construção do grafo depende só da ingestão (commits 9 e 10), e o juiz não depende da memória. Por isso o runner (12) vem antes da recuperação: com a ABC `MemorySystem` testada por um dublê, ele é testável sem o resto do núcleo, e a construção do grafo roda enquanto os commits 13–15 são escritos. A ABC entra com o runner; a fachada do commit 14 é a primeira implementação real.
+- As ablações entram junto com os estágios que desligam (13 e 19), em vez de num commit à parte: cada flag é testada ao lado do código que ela afeta.
+- Os baselines (16) vêm logo depois da tag porque não constroem grafo e são baratos; os runs deles rodam enquanto a Arquitetura B é escrita.
+- Os commits 24–26 (consoles, orquestrador ao vivo e LongMemEval) não produzem números para a avaliação: servem à demonstração ou são opcionais (D1). O commit 20 continua separado do orquestrador (25) porque as sondas usam o prompt de persona (§7.5).
+
+**Construção de uma conversa antes do portão de custo.** O prompt causal do slow path cresce com a conversa: os nomes dos falantes viram entidades *hub*, a vizinhança de 2 saltos alcança quase toda a conversa anterior, e o total de tokens de entrada cresce de forma quadrática com o número de turnos. A extrapolação a partir de 50 turnos não basta para estimar o custo e o tempo das 10 conversas (o tempo por turno também cresce). Por isso, depois do commit 12, só a menor conversa do LoCoMo é construída. Ela dá a medida real de custo e tempo, serve de conversa fixa do teste de regressão (15) e limita o retrabalho se os commits 13–15 exigirem mudar a ingestão.
+
+**Portão de custo (commit 15).** Com a medição da conversa construída, antes de construir as demais, decide-se:
+1. a forma de conter o custo: limitar as candidatas causais (`causal_candidate_limit`), rodar menos conversas, ampliar o orçamento ou trocar de provedor;
+2. o provedor do LLM principal (D3);
+3. se as conversas são construídas em paralelo.
+
+**Congelamento da ingestão.** A partir do portão de custo, a ingestão da Arquitetura A (fast path, slow path, prompt C.1 e prompt causal) não muda: só o código de consulta é alterado. Uma mudança na ingestão depois disso refaz todos os grafos e é registrada como tal.
+
+**Prioridade, se o escopo precisar ser reduzido:**
+- *Indispensável (commits 11–22):* Arquitetura A no LoCoMo (validação e H2); os baselines C1 e C2 (requisito metodológico da §2 e H3); Arquitetura B com contradição e escopo por espectador; as sondas do cenário diagnóstico; as métricas com tratamento estatístico.
+- *Sai primeiro:* os adaptadores FANToM e FactConsolidation (commit 23; RF2 e RF3 ficam medidos pelo cenário diagnóstico) e as ablações da narrativa além da comparação B × C3.
+- *Fora do caminho dos resultados:* commits 24–26.
+
+**Gargalo esperado:** inferência na ingestão (2 chamadas LLM por turno na Arquitetura A; 2–3 na Arquitetura B), com o passo causal crescendo com a conversa. As execuções de benchmark rodam em background enquanto o resto é implementado; o cache evita repetir chamadas.
 
 ## 11. Referências
 - MAGMA (ACL 2026) — https://aclanthology.org/2026.acl-long.1709/ · código: https://github.com/FredJiang0324/MAGMA
