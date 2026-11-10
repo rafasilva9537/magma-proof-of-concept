@@ -188,6 +188,122 @@ class IngestConfig:
 
 
 @dataclass(frozen=True)
+class IntentPhrases:
+    """One tuple of phrases per query intent: used for keyword rules and for prototype questions."""
+
+    why: tuple[str, ...]
+    when: tuple[str, ...]
+    entity: tuple[str, ...]
+
+    def of(self, intent: Intent) -> tuple[str, ...]:
+        match intent:
+            case Intent.WHY:
+                return self.why
+            case Intent.WHEN:
+                return self.when
+            case Intent.ENTITY:
+                return self.entity
+
+
+@dataclass(frozen=True)
+class IntentDescriptions:
+    """One sentence per query intent, read by a decision model as the meaning of each label."""
+
+    why: str
+    when: str
+    entity: str
+
+    def of(self, intent: Intent) -> str:
+        match intent:
+            case Intent.WHY:
+                return self.why
+            case Intent.WHEN:
+                return self.when
+            case Intent.ENTITY:
+                return self.entity
+
+
+@dataclass(frozen=True)
+class RouterConfig:
+    """Stage 1 intent classification: explicit interrogative keywords and prototype questions."""
+
+    keywords: IntentPhrases = IntentPhrases(
+        why=(
+            "why",
+            "because",
+            "how come",
+            "for what reason",
+            "what was the reason",
+            "what is the reason",
+            "what caused",
+            "what causes",
+            "what led to",
+            "what leads to",
+            "what resulted in",
+            "what results in",
+            "what motivated",
+            "what motivates",
+            "what prompted",
+            "what drove",
+        ),
+        when=(
+            "when",
+            "what time",
+            "what date",
+            "what year",
+            "what month",
+            "what day",
+            "which year",
+            "which month",
+            "which day",
+            "how long",
+            "how many days",
+            "how many weeks",
+            "how many months",
+            "how many years",
+        ),
+        entity=(
+            "who",
+            "whom",
+            "whose",
+            "which person",
+            "which people",
+            "which entity",
+            "which organization",
+        ),
+    )
+    prototypes: IntentPhrases = IntentPhrases(
+        why=(
+            "Why did this happen and what was the reason?",
+            "What caused or led to this event?",
+            "What motivated the person to do or decide this?",
+            "What was the effect or consequence of this action?",
+        ),
+        when=(
+            "When did this event take place?",
+            "On what date, month, or year did this happen?",
+            "How long did it last or how much time passed?",
+            "What happened right before or after that moment?",
+        ),
+        entity=(
+            "Who is this person and what is their role or relationship?",
+            "What activity, hobby, or object is associated with them?",
+            "Where did they go or what place was involved?",
+            "Which specific item, name, or detail was mentioned?",
+        ),
+    )
+    default_intent: Intent = Intent.ENTITY
+    # Decision model for questions without an explicit keyword: an encoder that scores the question against
+    # one description per intent in a single forward pass (no generated text).
+    intent_model: str = "fastino/GLiNER2.5-Decide"
+    intent_descriptions: IntentDescriptions = IntentDescriptions(
+        why="The question asks for a cause, reason, motivation or purpose.",
+        when="The question asks for a date, a moment in time or a duration.",
+        entity="The question asks for a person, object, place, activity or other fact.",
+    )
+
+
+@dataclass(frozen=True)
 class RetrievalConfig:
     rrf_k: int = 60
     top_k: int = 20
@@ -222,6 +338,7 @@ class Config:
     lexical_index: LexicalIndexConfig = LexicalIndexConfig()
     temporal: TemporalConfig = TemporalConfig()
     ingest: IngestConfig = IngestConfig()
+    router: RouterConfig = RouterConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
     traversal: TraversalConfig = TraversalConfig()
     context: ContextConfig = ContextConfig()

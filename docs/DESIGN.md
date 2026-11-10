@@ -4,9 +4,9 @@
 > As specs concretas de cada módulo (interfaces, contratos e trechos de código) derivam deste documento e ficam ao lado dele, em `docs/`.
 >
 > **Status:** análise concluída. **Decisão principal:** reimplementar o MAGMA do zero, fiel ao artigo (§5).
-> **Decididas (todas):** D1 (benchmarks por requisito; modos `sample` e `report`), D2 (router determinístico), D3 (GLM 5.3 Flash + juízes de outra família), D4 (baselines), D5 (inglês), D6 (sem framework de LLM), D7 (FAISS exato), D8 (Qwen3-Embedding-0.6B), D9 (perfil `narrative`). Premissa da avaliação: comparação controlada entre as implementações do projeto; o artigo é referência (D1).
+> **Decididas (todas):** D1 (benchmarks por requisito; modos `sample` e `report`), D2 (router determinístico com modelo de decisão local), D3 (GLM 5.3 Flash + juízes de outra família), D4 (baselines), D5 (inglês), D6 (sem framework de LLM), D7 (FAISS exato), D8 (Qwen3-Embedding-0.6B), D9 (perfil `narrative`). Premissa da avaliação: comparação controlada entre as implementações do projeto; o artigo é referência (D1).
 > **A verificar na implementação:** se o canal temporal do RRF usa só o τ ou também as `dates_mentioned` (uma claim que cita outro momento herda o τ do evento de fala); se o LongMemEval-KU entra no RF3 (D1).
-> **Próximo passo:** commits 1–10 do plano (§10.2) implementados; segue o commit 11 (router). O plano foi reagrupado de 42 para 26 commits, com o runner antes da recuperação. Em aberto até o portão de custo do commit 15: a forma de conter o custo da ingestão, o provedor do LLM principal (D3) e a construção em paralelo.
+> **Próximo passo:** commits 1–11 do plano (§10.2) implementados; segue o commit 12 (runner do LoCoMo). O plano foi reagrupado de 42 para 26 commits, com o runner antes da recuperação. Em aberto até o portão de custo do commit 15: a forma de conter o custo da ingestão, o provedor do LLM principal (D3) e a construção em paralelo.
 > **Regra da §9:** toda decisão registra recomendação, justificativa, alternativas comparadas e por que cada uma foi descartada (material direto para o artigo). Sem tom de roteiro de apresentação.
 > **Regra de escopo (PoC):** implementar tudo o que o artigo descreve e tudo o que a extensão exige; só otimizações e extras vão para a §12.
 >
@@ -279,6 +279,7 @@ magma/
   temporal.py    # tagger temporal (dateparser): expressão → janela do tamanho dela (dia, semana, mês, ano);
                  # na pergunta, janela [τs, τe]; no turno, resolve dates_mentioned com base no timestamp do evento
   router.py      # Stage 1: intenção T_q∈{WHY,WHEN,ENTITY} + janela [τs,τe] + v_q + q_key
+  intent_model.py # modelo de decisão que rotula a intenção (GLiNER2); único módulo que importa gliner2
   ingest.py      # Alg.2 Fast Path (sem LLM) + Alg.3 Slow Path (fila + worker; LLM) + prompt C.1
   retrieve.py    # Stage 2 RRF (Eq.4), Stage 3 beam search (Alg.1, Eq.5-6), Stage 4 linearização (Eq.7) + budgeting
   qa.py          # prompt C.2 com instrução dinâmica gerada pelo router
@@ -292,6 +293,7 @@ bench/           # harness, métricas, juiz C.3, estatística (compartilhado com
   probe_reasoning.py               # tokens de raciocínio por forma de pedir (esforço, orçamento) e por provedor
   measure_consolidation.py         # slow path numa conversa do LoCoMo com LLM e embedding reais: entidades, datas,
                                   # tamanho da vizinhança causal, posição das causas escolhidas, falhas e tokens
+  measure_router.py                # classificadores de intenção do Stage 1 nas 1.986 perguntas do LoCoMo, por categoria
 baselines/       # full_context.py, naive_rag.py
 tests/           # testes unitários de RRF, beam search e linearização com grafo de brinquedo
 ```
@@ -314,7 +316,7 @@ tests/           # testes unitários de RRF, beam search e linearização com gr
 |---|---|---|
 | O que é um "evento" | 1 turno = 1 `EventNode` | Mais simples; igual ao uso em LoCoMo |
 | C.1 usa LLM, mas o fast path não pode | C.1 roda no **slow path** | Respeita "no blocking LLM" do fast path |
-| Classificador "leve" de intenção | Keywords + fallback por similaridade com protótipos (embedding) | Determinístico, custo zero, acurácia mensurável (D2) |
+| Classificador "leve" de intenção | Modelo de decisão local (`fastino/GLiNER2.5-Decide`, encoder de uma passada) sobre a pergunta sem as expressões de data, com uma descrição por intenção | Determinístico, local, sem custo por pergunta; separa o que a pergunta pede do contexto temporal, que já vai para a janela (D2) |
 | Instrução dinâmica C.2 (4 categorias) × router (3 intenções) | WHEN→Temporal, WHY→Multi-hop/Inferência, ENTITY→Single-hop; "both/all/compare" → Multi-hop | Sem oracle; uma única fonte de roteamento |
 | Canal lexical ("keywords esparsas", sem método declarado) | **BM25 Okapi** (`rank_bm25`), `k1 = 1.5`, `b = 0.75`, piso de IDF `ε = 0.25`; tokens = palavras em minúsculas (`\w+`) sem stopwords do inglês, sem stemming; mesmo tokenizador para textos e consultas | Padrão consolidado de busca lexical, com os valores usuais; o código oficial usa um índice invertido próprio de unigramas e bigramas, sem fundamentação publicada |
 | Parser temporal ("temporal tagger" sem método nem granularidade) | `dateparser` com a data de referência (pergunta: fim da conversa; turno: timestamp do evento). Cada expressão vira a **janela do seu tamanho** ("yesterday" = o dia, "last week" = a semana de segunda a domingo, "in June" = o mês, "2022" = o ano); data ambígua lida como passada na pergunta e no período corrente no turno; na pergunta, só valem trechos com palavra temporal ou ano de 4 dígitos, e a janela cobre as menções mais específicas (o ano de "August 11 and August 15 2023" não alarga a janela) | Determinístico e genérico; o código oficial usa regex e `timedelta` específicos do LoCoMo. Expressões compostas ("two weeks before August 11") e vagas ("a few days ago") ficam fora: limitação registrada |
@@ -560,18 +562,42 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
   - **Contras aceitos:** mais lento que o MiniLM; as queries usam instrução no formato `Instruct: ...\nQuery: ...` (documentar o template usado); vetores de 1024d (índice maior, irrelevante nesta escala).
   - **Alternativa mais próxima:** `BGE-M3` (janela de 8k, artigo próprio publicado em 2024, muito citado). Fica como segunda opção se o Qwen3-Embedding der problema de instalação ou de desempenho.
   - **Fonte da comparação de modelos (blogs, números não comparáveis entre si):** https://zilliz.com/blog/choose-embedding-model-rag-2026 · https://d-central.tech/local-embedding-models/ · https://supermemory.ai/blog/best-open-source-embedding-models-benchmarked-and-ranked/
-- [x] **D2 — Roteamento.** ✅ **Decidido:** router **determinístico** de 3 intenções, igual nas duas arquiteturas: palavras-chave de intenção + fallback por protótipos de embedding.
+- [x] **D2 — Roteamento.** ✅ **Decidido:** router **determinístico** de 3 intenções, igual nas duas arquiteturas: **modelo de decisão local** sobre a pergunta sem as expressões de data.
   - **No artigo:** o Stage 1 usa "um classificador leve" que mapeia a pergunta para `T_q ∈ {WHY, WHEN, ENTITY}`; a intenção só escolhe o vetor `w_Tq` do score do beam (Eqs. 5–6). O artigo não diz se o classificador é regra, modelo ou LLM. A instrução dinâmica do C.2 usa as 4 categorias do LoCoMo (lacuna da §1.8). Sem a política adaptativa, o juiz cai de 0,700 para 0,637, a maior queda da Tab. 4.
   - **No código oficial:** `detect_query_intent` (`query_engine.py:225`) usa palavras-chave para as 3 intenções, com ENTITY como padrão, mas é código morto (só a beam search do Alg. 1, também morta, a chamaria). O router de fato usado é `detect_query_type` (`query_engine.py:247`): regex com 9 classes, vários padrões ajustados às perguntas do LoCoMo, e perguntas de entidade mandadas para arestas semânticas (§4).
   - **Esta implementação:**
-    1. palavras-chave de intenção ("why", "because", "what caused"…; "when", "before", "after"…; "who", "whose"…), partindo da `detect_query_intent`;
-    2. quando nenhuma casa, o vetor da pergunta é comparado com perguntas-protótipo de cada intenção, e vence a mais próxima (em vez de cair sempre em ENTITY);
-    3. a intenção mapeia para a instrução dinâmica do C.2 (§6.4).
+    1. as expressões de data que o tagger temporal encontra na pergunta ("in January 2024", "on May 8, 2022") são retiradas do texto que vai ao classificador. A data continua definindo a janela `[τs, τe]` do Stage 2; a intenção diz o que a pergunta pede. É a divisão do artigo: o filtro temporal cuida do "quando" como contexto, e `T_q` cuida da travessia;
+    2. um **modelo de decisão local** (`fastino/GLiNER2.5-Decide`, encoder DeBERTa-v3-large, Apache 2.0) lê a pergunta junto com uma descrição de cada intenção e pontua as três numa única passada, sem gerar texto. Descrições: WHY = causa, motivo, motivação ou propósito; WHEN = data, momento ou duração; ENTITY = pessoa, objeto, lugar, atividade ou outro fato (`RouterConfig.intent_descriptions`);
+    3. a intenção mapeia para a instrução dinâmica do C.2 (§6.4);
+    4. palavras-chave e protótipos ficam no código como implementações alternativas da mesma interface (`IntentClassifier`), usadas na comparação.
+  - **Intenção única, como no artigo:** um só `T_q` por pergunta (Eq. 6, Alg. 1 e a ordenação final por `T_q`). Perguntas que misturam intenções são cobertas pelos outros sinais: a data pela janela, a entidade pelas âncoras lexical e vetorial e pelos pesos positivos de todas as arestas. Pesos mistos (combinação dos `w_Tq` pela probabilidade de cada intenção) seriam um desvio e ficam na §12.
+  - **Medido** (`bench/measure_router.py`, 1.986 perguntas do LoCoMo, por categoria). O LoCoMo não rotula intenção: a categoria serve de aproximação para comparar as variantes, não de acurácia.
+
+    | Classificador | Cat. 2 (temporal): WHEN | Cat. 4 (factual): ENTITY | WHY no total |
+    |---|---|---|---|
+    | Palavras-chave do código oficial | 79,8% | 80,6% | 3,9% |
+    | Palavras-chave interrogativas | 86,0% | 89,3% | 4,0% |
+    | Palavras-chave + protótipos (Qwen3-Embedding) | 91,0% | 58,4% | 17,4% |
+    | Só protótipos | 58,3% | 61,1% | 17,9% |
+    | Modelo de decisão | 98,1% | 66,2% | 11,5% |
+    | Palavras-chave + modelo, sem datas | 87,5% | 77,6% | 11,3% |
+    | **Modelo de decisão, sem datas** | **87,5%** | **80,0%** | **11,6%** |
+
+    Nenhuma categoria é pura: a Cat. 2 tem perguntas que pedem entidade ("Which hobby did Sam take up in May 2023?"), e a Cat. 4 tem `WHY` e `WHEN` explícitos (~11% dela). Os casos em que as variantes divergem foram inspecionados em amostras sorteadas.
   - **O router não escolhe nós, só pondera tipos de aresta.** A semântica ("guerra" ≈ "conflito") vem do canal vetorial do Stage 2 e do termo `λ2·sim(v_j, v_q)` do beam. Todos os pesos de `w_Tq` são positivos: uma pergunta mal classificada perde prioridade, não nós.
   - **Acurácia do router** medida nas sondas com intenção-gabarito (§8.4).
+  - **Contras aceitos:** ~2 GB de pesos e ~0,15–0,4 s por pergunta na CPU; mais uma dependência (`gliner2`); os números publicados do modelo são do próprio fabricante, e num índice amplo de modelos de decisão (conhecimento, raciocínio, ferramentas) ele fica entre os últimos. Para três rótulos sobre o tipo da pergunta, vale a medição acima.
   - **Alternativas descartadas:**
     - *regex de 9 classes do código oficial:* ajustada ao benchmark (o mesmo vazamento da §4);
-    - *só palavras-chave, com padrão fixo:* intenções parafraseadas ("What made the war break out?") cairiam em ENTITY;
+    - *só palavras-chave, com padrão fixo:* intenções parafraseadas ("What made Jon choose…", "What inspired…") caem em ENTITY (4% de `WHY` no total), e "what made" é ambíguo ("What did Mel make…" pede objeto), então nenhuma lista resolve;
+    - *palavras-chave do código oficial:* casam palavras no meio da frase ("during", "after", "free time"), desviam 14,3% da Cat. 4 para `WHEN` e não têm "how long";
+    - *palavras-chave + protótipos no espaço do embedding (a proposta anterior desta decisão):* o bi-encoder agrupa por assunto e verbo, não pelo tipo da pergunta ("What color did Joanna choose for her hair?" → `WHY` por causa de *choose*), e puxa 41,6% da Cat. 4 para `WHY`/`WHEN`;
+    - *palavras-chave antes do modelo:* "when" como conjunção no meio da frase ("What emotion does Dave feel when he sees…") vira `WHEN`; o modelo sozinho acerta esses casos e, igualmente, as perguntas iniciadas por "When…"/"Why…";
+    - *modelo com as datas no texto:* confunde "a pergunta cita uma data" com "a pergunta pede uma data" ("Which city did John recommend to Tim in January 2024?" → `WHEN`);
+    - *cross-encoder NLI zero-shot (`deberta-v3-base-zeroshot-v2.0`):* genérico, treinado em tema, sentimento e NLI, sem nenhum dado de tipo de pergunta, e usaria a pergunta como premissa, fora do que viu no treino;
+    - *classificadores de tipo de pergunta prontos:* os do TREC publicados têm só as 6 classes grossas (`DESC` mistura motivo, definição e modo); o da ontologia de Cao & Wang (2021) tem `cause`, mas nenhuma classe de tempo;
+    - *modelos de decisão remotos (Jev, Perplexity Decider):* mais uma API por pergunta, em acesso antecipado, sem determinismo declarado;
+    - *`GLiDE-0.4B` (mesmo fabricante, melhor em intenção no índice amplo):* licença própria, código fora do PyPI e versões fixas de torch/transformers testadas só em GPU;
     - *router por LLM:* não determinístico e uma chamada de latência a mais por pergunta (§12);
     - *otimização de prompts do router (ex.: GEPA):* só faria sentido com router por LLM (§12).
 - [x] **D3 — Modelos.** ✅ **Decidido:**
@@ -787,7 +813,7 @@ Os commits 1–10 seguiram o plano original. A partir do 11, commits do mesmo as
 | 8 | M1 | `Add temporal tagger` | `temporal.py`: `dateparser` com data-base do evento; janela `[τs, τe]` | — | §1.3, §6.2 |
 | 9 | M1 | `Implement fast path ingestion` | `ingest.py`: Alg. 2 (evento, `TEMPORAL`, embedding, BM25, `SEMANTIC`, fila) | — | §1.4, §6.3 |
 | 10 | M1 | `Implement slow path consolidation` | `ingest.py`: Alg. 3, prompt C.1, entidades e `ENTITY`, datas, `CAUSAL` com δ | — | §1.4, §6.3 |
-| 11 | M1 | `Route queries by intent` | `router.py`: classificador de intenção, janela temporal, `v_q`, `q_key` | — | D2 |
+| 11 | M1 | `Route queries by intent` | `router.py` + `intent_model.py`: modelo de decisão sobre a pergunta sem datas, janela temporal, `v_q`, `q_key`; `bench/measure_router.py` | — | D2 |
 | 12 | M2 | `Build LoCoMo runner with judge and cost metrics` | `bench/runner.py`: amostragem estratificada com seed, modos `sample`/`report`, piloto de custo, teto, `results/<run_id>/`, modo só de construção do grafo; adaptador do LoCoMo (conversas, timestamps, perguntas, categorias); juiz C.3 configurável; tempo de build, tokens/query e latência (Tab. 3). Tudo contra a ABC `MemorySystem` (`add_turn`, `consolidate`, `query`), testada com um dublê | construção do grafo de **uma** conversa do LoCoMo (a menor) | D1, D3, §1.6, §6.5, §8.4 |
 | 13 | M1 | `Implement retrieval stages with paper ablations` | `retrieve.py`: Stage 2 (Eq. 4, agregação de facetas por âncora), Stage 3 (Alg. 1, Eqs. 5–6) e Stage 4 (ordenação, Eq. 7, budgeting); flags das Tabs. 4 e 5 aplicadas em cada estágio, na consulta | — | §1.3, §6.4, §6.5, D9 |
 | 14 | M1 | `Expose memory facade with adaptive QA` | `qa.py`: prompt C.2 com instrução dinâmica do router; `memory.py`: implementação de `MemorySystem` com `add_turn`, `consolidate(drain)`, `query`; thread real | run `sample` na conversa já construída | §1.6, §6.3, §6.4 |
@@ -864,6 +890,7 @@ Fase atual: prova de conceito. Critério para entrar no PoC: ser exigido pelos r
 | Segmentação de mensagens longas em vários eventos (diluição) | O artigo não trata; é otimização de recuperação, não requisito. O PoC usa 1 turno = 1 evento | D8 |
 | Índice aproximado (HNSW/IVF) ou banco vetorial dedicado | Só compensa a partir de ~10⁵ vetores; o PoC é bem menor | D7 |
 | Router **alternativo** por LLM / otimização de prompts (ex.: GEPA) | O router do artigo (intenção WHY/WHEN/ENTITY, parser temporal, keywords, pesos adaptativos) **está no PoC** (§6.3); aqui fica só a variante por LLM, por custo e não determinismo | D2 |
+| Pesos mistos de intenção (combinar os `w_Tq` pela probabilidade de cada intenção) | O artigo usa um único `T_q` (Eq. 6, Alg. 1, ordenação final); perguntas mistas já são cobertas pela janela temporal e pelas âncoras | D2 |
 | Hierarquia de nós (agrupamentos episódicos) | O artigo só a menciona (§3.2), sem algoritmo; o `EpisodeNode` do código oficial vem do Nemori, fora do artigo | §1.8 |
 | Grafo de crenças explícito (`BELIEVES {confidence}`) | O status relativo ao observador cobre os RFs | §7.4 |
 | Desafios narrativos: sarcasmo, boatos, promessas, ToM de 2ª ordem, decaimento de memória, hipotéticos, vínculos sociais, autoridade, `REPLIES_TO`, `AWARE_THAT` | Cada um é um projeto à parte | §3.2 |

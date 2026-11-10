@@ -111,10 +111,16 @@ class InstructedEmbedder:
             self._warn_if_truncated(text)
         return normalize(self._encoder.encode(batch, prompt=None))
 
+    def embed_queries(self, texts: Sequence[str]) -> Matrix:
+        batch = list(texts)
+        if not batch:
+            return np.zeros((0, self.dimension), dtype=np.float32)
+        for text in batch:
+            self._warn_if_truncated(text)
+        return normalize(self._encoder.encode(batch, prompt=self._query_prompt))
+
     def embed_query(self, text: str) -> Vector:
-        self._warn_if_truncated(text)
-        matrix = normalize(self._encoder.encode([text], prompt=self._query_prompt))
-        query_vector: Vector = matrix[0]
+        query_vector: Vector = self.embed_queries([text])[0]
         return query_vector
 
     def _warn_if_truncated(self, text: str) -> None:

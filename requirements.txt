@@ -8,6 +8,7 @@ rank-bm25>=0.2.2
 torch>=2.3
 transformers>=4.51
 sentence-transformers>=3.0
+gliner2[local]>=2.1
 dateparser>=1.2
 tiktoken>=0.7
 scipy>=1.13

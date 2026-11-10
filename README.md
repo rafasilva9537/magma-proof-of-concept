@@ -7,7 +7,7 @@ Reimplementação do MAGMA (*Multi-Graph based Agentic Memory Architecture*, Jia
 
 ## Requisitos
 - Python 3.12 (o `faiss-cpu` ainda não publica versão para Python mais novo)
-- ~2 GB livres para o modelo de embedding
+- ~4 GB livres para os modelos locais (embedding e classificador de intenção)
 
 ## Instalação
 
@@ -33,6 +33,12 @@ Reimplementação do MAGMA (*Multi-Graph based Agentic Memory Architecture*, Jia
 
    ```bash
    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('Qwen/Qwen3-Embedding-0.6B')"
+   ```
+
+   Baixe também o classificador de intenção do router (`fastino/GLiNER2.5-Decide`, ~2 GB, licença Apache 2.0), que roda localmente na CPU:
+
+   ```bash
+   python -c "from gliner2 import AutoExtractor; AutoExtractor.from_pretrained('fastino/GLiNER2.5-Decide')"
    ```
 
    No Windows, os avisos sobre *symlinks* e sobre `HF_TOKEN` podem ser ignorados: o cache funciona sem eles, só ocupa um pouco mais de disco.
