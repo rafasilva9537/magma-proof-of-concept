@@ -123,6 +123,10 @@ class InstructedEmbedder:
         query_vector: Vector = self.embed_queries([text])[0]
         return query_vector
 
+    def count_tokens(self, text: str) -> int:
+        """Tokens of `text` for the model's tokenizer; the context budget of Stage 4 is counted with it."""
+        return self._encoder.count_tokens(text)
+
     def _warn_if_truncated(self, text: str) -> None:
         size = self._encoder.count_tokens(text)
         if size > self._encoder.max_tokens:

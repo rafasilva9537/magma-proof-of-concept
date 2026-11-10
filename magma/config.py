@@ -306,8 +306,12 @@ class RouterConfig:
 @dataclass(frozen=True)
 class RetrievalConfig:
     rrf_k: int = 60
+    # Vector Top-K of Tab. 6: the depth of the vector and keyword channels, and the number of anchors kept.
     top_k: int = 20
     channel_weights: ChannelWeights = ChannelWeights()
+    # The time channel takes an event whose own time falls in the query window, or, when this is on, one that
+    # mentions a date overlapping it ("we went camping last year", said in 2023, for a question about 2022).
+    time_channel_uses_mentioned_dates: bool = True
 
 
 @dataclass(frozen=True)
@@ -328,6 +332,7 @@ class TraversalConfig:
 
 @dataclass(frozen=True)
 class ContextConfig:
+    # Counted with the tokenizer of the embedding model, so the budget is an approximation for the answering LLM.
     token_budget: int = 2500
 
 

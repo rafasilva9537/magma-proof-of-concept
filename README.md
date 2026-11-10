@@ -64,6 +64,12 @@ Só construir a memória da menor conversa (`conv-30`, 369 turnos), sem pergunta
 python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json --build-only
 ```
 
+Medir a recuperação (Stages 1–4, sem chamar o LLM) sobre a memória construída: onde cada turno de evidência fica (canal temporal, âncoras, nós visitados, contexto), quantas vezes o piso de similaridade da travessia descarta um vizinho e o tamanho do contexto. Resultado em `runs/measurements/retrieval/<conversa>/`:
+
+```bash
+python -m bench.measure_retrieval --locomo MAGMA-original-repo/data/locomo10.json --memory results/magma-sample-build-seed7/memories/conv-30 --sample conv-30
+```
+
 Amostra estratificada de 40 perguntas da menor conversa (modo `sample`, padrão):
 
 ```bash

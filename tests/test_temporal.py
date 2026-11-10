@@ -113,3 +113,26 @@ def test_query_window_without_mentions() -> None:
 def test_query_window_of_a_single_mention(tagger: DateparserTagger) -> None:
     mentions = tagger.find("What did Melanie do in May 2023?", SESSION, PAST)
     assert query_window(mentions) == window((2023, 5, 1), (2023, 6, 1))
+
+
+def test_dates_resolve_against_a_story_clock(tagger: DateparserTagger) -> None:
+    # In a narrative scenario τ is the clock of the story: "last year" said in 2187 is 2186.
+    mention = tagger.resolve("last year", datetime(2187, 3, 1), DatePreference.CURRENT_PERIOD)
+
+    assert mention is not None
+    assert mention.window == TimeWindow(start=datetime(2186, 1, 1), end=datetime(2187, 1, 1))
+
+
+def test_a_fictional_calendar_is_left_unresolved(tagger: DateparserTagger) -> None:
+    story_time = datetime(2187, 3, 1)
+
+    assert tagger.resolve("the second moon of Kael, cycle 7", story_time, DatePreference.CURRENT_PERIOD) is None
+    assert tagger.resolve("year 3019 of the Reckoning", story_time, DatePreference.CURRENT_PERIOD) is None
+    assert tagger.find("What happened in year 3019 of the Reckoning?", story_time, PAST) == []
+
+
+def test_a_bare_fictional_year_is_read_as_a_gregorian_year(tagger: DateparserTagger) -> None:
+    mention = tagger.resolve("year 3019", datetime(2187, 3, 1), DatePreference.CURRENT_PERIOD)
+
+    assert mention is not None
+    assert mention.window == TimeWindow(start=datetime(3019, 1, 1), end=datetime(3020, 1, 1))
