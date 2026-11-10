@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from magma.config import Intent, IntentDescriptions
+
+if TYPE_CHECKING:
+    from gliner2 import AutoExtractor
 
 _TASK_NAME = "intent"
 
@@ -36,11 +39,9 @@ class GlinerLabeler:
     """A GLiNER2 decision model (e.g. `fastino/GLiNER2.5-Decide`) run locally."""
 
     def __init__(self, model_name: str, batch_size: int = 8) -> None:
-        from gliner2 import AutoExtractor  # heavy import: only when a model is actually used
-
         self._model_name = model_name
-        self._model = AutoExtractor.from_pretrained(model_name)
         self._batch_size = batch_size
+        self._model: AutoExtractor | None = None
 
     @property
     def name(self) -> str:
@@ -49,6 +50,10 @@ class GlinerLabeler:
     def label(self, questions: Sequence[str], descriptions: IntentDescriptions) -> list[LabeledIntent]:
         if not questions:
             return []
+        if self._model is None:
+            from gliner2 import AutoExtractor  # heavy import: only when a model is actually used
+
+            self._model = AutoExtractor.from_pretrained(self._model_name)
         task = {_TASK_NAME: {"labels": {intent.value: descriptions.of(intent) for intent in Intent}}}
         raw_results = self._model.batch_classify_text(
             list(questions), task, batch_size=self._batch_size, include_confidence=True

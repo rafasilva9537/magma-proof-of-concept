@@ -53,10 +53,11 @@ from bench.judge import Judge
 from bench.lexical_metrics import bleu1, token_f1
 from bench.locomo import load_samples, to_conversation
 from magma.config import DEFAULT
-from magma.embed import Embedder, InstructedEmbedder
+from magma.embed import InstructedEmbedder
 from magma.json_types import JSONObject, JSONValue
 from magma.llm import ClientSettings, LLMClient, Usage
 from magma.memory import MagmaMemory, MemorySystem
+from magma.router import build_default_classifier
 from magma.temporal import DateparserTagger
 
 SAMPLE_QUESTIONS = 40
@@ -298,21 +299,24 @@ def run_benchmark(
             if not build_only and not asked:
                 continue
             memory = new_memory()
-            seconds, usage = build_memory(conversation, memory)
-            memory.save(output.memory_directory(conversation.id))
-            build = BuildRecord(conversation.id, len(conversation.turns), round(seconds, 2), usage, meter.charge_build(usage))
-            builds.append(build)
-            output.append_build(build)
-            meter.check()
-            if build_only or judge is None:
-                continue
-            for question in asked:
-                record = ask(memory, judge, meter, conversation, question)
-                answers.append(record)
-                output.append_answer(record)
+            try:
+                seconds, usage = build_memory(conversation, memory)
+                memory.save(output.memory_directory(conversation.id))
+                build = BuildRecord(conversation.id, len(conversation.turns), round(seconds, 2), usage, meter.charge_build(usage))
+                builds.append(build)
+                output.append_build(build)
                 meter.check()
-                if mode is RunMode.REPORT and len(answers) == pilot_questions:
-                    meter.check_projection(len(answers), len(questions) - len(answers))
+                if build_only or judge is None:
+                    continue
+                for question in asked:
+                    record = ask(memory, judge, meter, conversation, question)
+                    answers.append(record)
+                    output.append_answer(record)
+                    meter.check()
+                    if mode is RunMode.REPORT and len(answers) == pilot_questions:
+                        meter.check_projection(len(answers), len(questions) - len(answers))
+            finally:
+                memory.close()
     except BudgetExceeded as error:
         stopped = str(error)
 
@@ -510,11 +514,12 @@ def main() -> None:
         judge_prices = Prices(0.0, 0.0)  # no judge calls in a build-only run
     meter = CostMeter(arguments.max_cost_usd, llm_prices, judge_prices)
 
-    embedder: Embedder = InstructedEmbedder.from_config()
+    embedder = InstructedEmbedder.from_config()
     tagger = DateparserTagger()
+    classifier = build_default_classifier(tagger)
 
     def new_memory() -> MemorySystem:
-        return MagmaMemory.create(llm, embedder, tagger)
+        return MagmaMemory.create(llm, embedder, tagger, embedder, classifier=classifier)
 
     summary = run_benchmark(
         conversations, questions, new_memory, judge, meter, output, run_id, mode, arguments.build_only, arguments.pilot_questions
