@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from bench.locomo import find_sample, load_samples, session_time, sessions, turn_text
+from bench.locomo import UNANSWERABLE, LocomoCategory, find_sample, load_samples, session_time, sessions, to_conversation, turn_text
 
 SAMPLE = {
     "sample_id": "conv-x",
@@ -55,3 +55,27 @@ def test_unknown_sample_raises(tmp_path: Path) -> None:
 def test_session_time_reads_the_dataset_format(tmp_path: Path) -> None:
     found = sessions(find_sample(load_samples(write(tmp_path)), "conv-x"))
     assert [session_time(session) for session in found] == [datetime(2023, 5, 9, 13, 0), datetime(2023, 10, 20, 14, 0)]
+
+
+def test_adapter_dates_turns_by_session_and_asks_at_the_last_session(tmp_path: Path) -> None:
+    conversation = to_conversation(find_sample(load_samples(write(tmp_path)), "conv-x"))
+    assert conversation.id == "conv-x"
+    assert [(turn.speaker, turn.text, turn.timestamp) for turn in conversation.turns] == [
+        ("Melanie", "[Image: a photo of a dog] Look.", datetime(2023, 5, 9, 13, 0)),
+        ("Caroline", "Long time!", datetime(2023, 10, 20, 14, 0)),
+    ]
+    assert conversation.reference_time == datetime(2023, 10, 20, 14, 0)
+    question = conversation.questions[0]
+    assert (question.id, question.category, question.gold, question.evidence) == ("conv-x-q1", LocomoCategory.TEMPORAL, "9 May 2023", ("D1:2",))
+
+
+def test_adversarial_questions_get_the_unanswerable_gold(tmp_path: Path) -> None:
+    sample = dict(SAMPLE)
+    sample["qa"] = [
+        {"question": "What did Caroline adopt?", "adversarial_answer": "a cat", "evidence": [], "category": 5},
+        {"question": "How old is Melanie?", "answer": 30, "evidence": ["D2:1"], "category": 4},
+    ]
+    path = tmp_path / "adversarial.json"
+    path.write_text(json.dumps([sample]), encoding="utf-8")
+    questions = to_conversation(load_samples(path)[0]).questions
+    assert [(q.category, q.gold) for q in questions] == [(LocomoCategory.ADVERSARIAL, UNANSWERABLE), (LocomoCategory.SINGLE_HOP, "30")]

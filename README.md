@@ -54,6 +54,30 @@ Reimplementação do MAGMA (*Multi-Graph based Agentic Memory Architecture*, Jia
    python -m bench.measure_consolidation --locomo MAGMA-original-repo/data/locomo10.json --sample conv-26 --max-turns 50
    ```
 
+## Benchmark (LoCoMo)
+
+O runner constrói uma memória por conversa, faz as perguntas na data da última sessão, julga cada resposta com o prompt C.3 do artigo (juiz em `JUDGE_*`) e calcula F1, BLEU-1, tempo de construção, tokens e latência por pergunta. Tudo vai para `results/<run_id>/` (ignorado pelo git): configuração do run, um registro por construção e por resposta, resumo, memórias salvas e o log cru das chamadas.
+
+Só construir a memória da menor conversa (`conv-30`, 369 turnos), sem perguntas:
+
+```bash
+python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json --build-only
+```
+
+Amostra estratificada de 40 perguntas da menor conversa (modo `sample`, padrão):
+
+```bash
+python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json
+```
+
+LoCoMo inteiro (modo `report`), com teto de custo. Os preços são em US$ por milhão de tokens (entrada e saída) do LLM da memória e do juiz. Depois de um piloto de 20 perguntas, o runner projeta o custo do resto e para se a projeção passar do teto:
+
+```bash
+python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json --mode report --max-cost-usd 20 --llm-prices <entrada> <saída> --judge-prices <entrada> <saída>
+```
+
+Chamadas já feitas saem do cache, sem custo; rodar o mesmo comando de novo refaz o run de graça.
+
 ## Verificação
 
 ```bash

@@ -85,12 +85,21 @@ class Structured(Generic[T]):
 
 @dataclass
 class Usage:
+    """Tokens and latency of a set of calls.
+
+    Calls served from the cache count with the tokens and latency of the original call, so the
+    numbers describe the work whether or not it was paid again; the `billed_` fields count only
+    the calls actually sent, which is what a run costs.
+    """
+
     calls: int = 0
     cached_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     reasoning_tokens: int = 0
     latency_s: float = 0.0
+    billed_prompt_tokens: int = 0
+    billed_completion_tokens: int = 0
 
     def add(self, r: LLMResult) -> None:
         self.calls += 1
@@ -99,6 +108,9 @@ class Usage:
         self.completion_tokens += r.completion_tokens
         self.reasoning_tokens += r.reasoning_tokens
         self.latency_s += r.latency_s
+        if not r.cached:
+            self.billed_prompt_tokens += r.prompt_tokens
+            self.billed_completion_tokens += r.completion_tokens
 
     def merge(self, other: Usage) -> None:
         self.calls += other.calls
@@ -107,6 +119,21 @@ class Usage:
         self.completion_tokens += other.completion_tokens
         self.reasoning_tokens += other.reasoning_tokens
         self.latency_s += other.latency_s
+        self.billed_prompt_tokens += other.billed_prompt_tokens
+        self.billed_completion_tokens += other.billed_completion_tokens
+
+    def since(self, earlier: Usage) -> Usage:
+        """What was used between a snapshot (`earlier`) and this one."""
+        return Usage(
+            calls=self.calls - earlier.calls,
+            cached_calls=self.cached_calls - earlier.cached_calls,
+            prompt_tokens=self.prompt_tokens - earlier.prompt_tokens,
+            completion_tokens=self.completion_tokens - earlier.completion_tokens,
+            reasoning_tokens=self.reasoning_tokens - earlier.reasoning_tokens,
+            latency_s=self.latency_s - earlier.latency_s,
+            billed_prompt_tokens=self.billed_prompt_tokens - earlier.billed_prompt_tokens,
+            billed_completion_tokens=self.billed_completion_tokens - earlier.billed_completion_tokens,
+        )
 
 
 class ContextWindowExceeded(ValueError):
