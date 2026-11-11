@@ -91,12 +91,18 @@ python -m pytest
 python -m mypy
 ```
 
-Os testes não chamam nenhuma API. O teste que usa o modelo de embedding real é pulado por padrão; para rodá-lo depois do passo 3:
+Os testes não chamam nenhuma API. Os testes que usam os modelos reais (embedding e intenção) são pulados por padrão; para rodá-los depois do passo 3:
 
 ```bash
 # Windows (PowerShell)
-$env:RUN_MODEL_TESTS="1"; python -m pytest tests/test_embed.py
+$env:RUN_MODEL_TESTS="1"; python -m pytest tests/test_embed.py tests/regression
 
 # Linux / macOS
-RUN_MODEL_TESTS=1 python -m pytest tests/test_embed.py
+RUN_MODEL_TESTS=1 python -m pytest tests/test_embed.py tests/regression
+```
+
+`tests/regression/` guarda o snapshot da Arquitetura A (perfil `magma`) gravado na tag `v-original`: a saída das etapas de consulta para as 105 perguntas da menor conversa do LoCoMo, sobre a memória salva em `tests/regression/data/conv-30/`, e uma impressão digital dos prompts e das configurações da ingestão. A parte da ingestão roda sempre; a das consultas, com `RUN_MODEL_TESTS=1`. Uma mudança em `magma/` que altere o snapshot precisa ser intencional: registrar o motivo, gravar o snapshot de novo e medir a Arquitetura A de novo:
+
+```bash
+python -m bench.snapshot_retrieval --locomo MAGMA-original-repo/data/locomo10.json --memory tests/regression/data/conv-30 --sample conv-30 --output tests/regression/conv-30.snapshot.json
 ```
