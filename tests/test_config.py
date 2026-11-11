@@ -16,6 +16,12 @@ def test_table6_values() -> None:
     assert DEFAULT.llm.temperature == 0.0
 
 
+def test_causal_prompt_shows_a_limited_number_of_candidates() -> None:
+    # The builds of the benchmark depend on it: without a limit the prompt grows with the conversation.
+    assert DEFAULT.ingest.neighborhood_hops == 2
+    assert DEFAULT.ingest.causal_candidate_limit == 50
+
+
 def test_intent_weights_inside_table6_ranges() -> None:
     ranges = {
         Layer.ENTITY: (2.5, 6.0),

@@ -182,9 +182,10 @@ class IngestConfig:
     # δ: a CAUSES edge is kept when the confidence given by the LLM is above it. The paper gives no value.
     causal_min_confidence: float = 0.5
     neighborhood_hops: int = 2
-    # Earlier events of the neighborhood shown to the causal prompt. None shows all of them, as Alg. 3 does;
-    # through a frequent entity the 2-hop neighborhood can reach most of the conversation.
-    causal_candidate_limit: int | None = None
+    # Earlier events of the neighborhood shown to the causal prompt, the closest hops and the most recent first.
+    # Alg. 3 gives no size. Through the speakers, who are entities of every turn, the 2-hop neighborhood is the
+    # whole earlier conversation, so the prompt grows with it and the build cost with its square. None shows all.
+    causal_candidate_limit: int | None = 50
 
 
 @dataclass(frozen=True)

@@ -9,6 +9,12 @@ of causal edges is kept for checking by hand.
 
     python -m bench.measure_consolidation --locomo MAGMA-original-repo/data/locomo10.json --sample conv-26
 
+The causal prompt shows the candidates the config allows; --all-candidates
+shows the whole neighborhood, and --candidate-limit another number. A run
+replaces the folder of the same name, so runs to be compared take a --label:
+
+    python -m bench.measure_consolidation --locomo ... --sample conv-30 --all-candidates --label all-candidates
+
 The LLM is read from the LLM_* variables (see .env.example); its calls are
 cached, so a second run costs nothing. Raw data goes to
 runs/measurements/consolidation/<sample>/: the report, the graph and the log of
@@ -309,17 +315,36 @@ def print_summary(report: ConsolidationReport) -> None:
         print(f"{usage.tag}: {usage.calls} calls, {usage.prompt_tokens} prompt + {usage.completion_tokens} completion tokens")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--locomo", type=Path, required=True, help="path to locomo10.json")
     parser.add_argument("--sample", default="conv-26", help="LoCoMo conversation id")
-    parser.add_argument("--candidate-limit", type=int, default=None, help="causal candidates shown; default: all (Alg. 3)")
+    candidates = parser.add_mutually_exclusive_group()
+    candidates.add_argument(
+        "--candidate-limit",
+        type=int,
+        default=DEFAULT.ingest.causal_candidate_limit,
+        help="causal candidates shown to the prompt; default: the one in the config",
+    )
+    candidates.add_argument("--all-candidates", action="store_true", help="show the whole 2-hop neighborhood, as Alg. 3 is written")
     parser.add_argument("--max-turns", type=int, default=None, help="only the first turns, for a cheap pilot")
     parser.add_argument("--sample-size", type=int, default=15, help="causal edges kept for checking by hand")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output-dir", type=Path, default=Path("runs/measurements/consolidation"))
     parser.add_argument("--label", default=None, help="suffix of the run folder, e.g. the LLM settings being compared")
-    arguments = parser.parse_args()
+    return parser
+
+
+def candidate_limit(arguments: argparse.Namespace) -> int | None:
+    """The limit asked on the command line; None is the whole neighborhood."""
+    if arguments.all_candidates:
+        return None
+    limit: int | None = arguments.candidate_limit
+    return limit
+
+
+def main() -> None:
+    arguments = build_parser().parse_args()
 
     load_dotenv()
     run_name = arguments.sample if arguments.max_turns is None else f"{arguments.sample}-first-{arguments.max_turns}"
@@ -330,7 +355,7 @@ def main() -> None:
     log_path = output / "llm_calls.jsonl"
     log_path.unlink(missing_ok=True)  # the log of this run only
 
-    config = replace(DEFAULT.ingest, causal_candidate_limit=arguments.candidate_limit)
+    config = replace(DEFAULT.ingest, causal_candidate_limit=candidate_limit(arguments))
     embedder: Embedder = InstructedEmbedder.from_config()
     llm = LLMClient.from_env("LLM", log_path=log_path)
     graph = NetworkXGraphStore(MAGMA_PROFILE)

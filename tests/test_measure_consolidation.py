@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from bench.locomo import LocomoSample
-from bench.measure_consolidation import distribution, ingest_conversation, read_calls, summarize
+from bench.measure_consolidation import build_parser, candidate_limit, distribution, ingest_conversation, read_calls, summarize
 from magma.bm25_index import BM25Index
 from magma.config import DEFAULT
 from magma.embed import Matrix, Vector, normalize
@@ -97,6 +97,13 @@ def test_report_of_a_small_conversation(tmp_path: Path) -> None:
     assert [(c.name, c.count) for c in report.confidence] == [(">= 0.8", 1)]
     assert [(u.tag, u.calls) for u in report.usage] == [("causal", 2), ("extraction", 3)]
     assert [example.reason for example in report.examples] == ["the dog adopted earlier"]
+
+
+def test_candidate_limit_is_the_one_in_the_config_unless_another_is_asked() -> None:
+    parser = build_parser()
+    assert candidate_limit(parser.parse_args(["--locomo", "locomo10.json"])) == DEFAULT.ingest.causal_candidate_limit
+    assert candidate_limit(parser.parse_args(["--locomo", "locomo10.json", "--candidate-limit", "10"])) == 10
+    assert candidate_limit(parser.parse_args(["--locomo", "locomo10.json", "--all-candidates"])) is None
 
 
 def test_pilot_stops_after_the_first_turns() -> None:
