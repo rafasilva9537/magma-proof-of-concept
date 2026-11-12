@@ -1,17 +1,22 @@
 """Stage 4 for the narrative profile: the retrieved events in two sections, from one viewer's side.
 
-- "What you witnessed": per event, what could be seen (the action) and the act
-  of speaking ("B spoke to {A, C}"), without the content.
-- "What was said": the claims of each event, with speaker, audience and, when
-  it is not UNVERIFIED, the status the viewer sees with its evidence, e.g.
-  `<t:...> B told {A, C}: "B was in the lab" [REFUTED by <ref:e35>] <ref:e12.c1>`.
-  A speech with no claim extracted is written whole, so its content is not lost.
+- "What you witnessed": what could be seen happen, the action of a turn or a
+  narration, e.g. `<t:...> B: *picks up the wand* <ref:e12>`.
+- "What was said": the speech of each turn as it was said, with speaker and
+  audience, e.g. `<t:...> B said to {A, C}: "I was in the lab all night." <ref:e12>`.
+  Under it, the claims whose status, as the viewer sees it, is not UNVERIFIED,
+  with the evidence: `  - "B was in the lab" [REFUTED by <ref:e35>] <ref:e12.c1>`.
+
+The speech is written as said, not through its claims: a claim is the LLM's
+paraphrase and can drop the date or the name a question asks for, and with the
+words of the turn the context matches the magma profile's except for what
+visibility and status add. Printing UNVERIFIED on every claim would cost tokens
+and make the reader doubt everything in speech-only conversations, so only
+other statuses are written.
 
 Facets are never written alone: a claim the beam search reached brings in its
-event, and an event brings all its claims, so the budget folds an event with
-its claims. Order and budgeting are the paper's (Eq. 7), from `GraphLinearizer`.
-Printing UNVERIFIED on every claim would cost tokens and make the reader doubt
-everything in speech-only conversations, so only other statuses are written.
+event, so the budget folds an event with its claims. Order and budgeting are
+the paper's (Eq. 7), from `GraphLinearizer`.
 """
 
 from __future__ import annotations
@@ -66,32 +71,37 @@ class ViewerLinearizer(GraphLinearizer):
             if node_id in omitted:
                 folded_run += 1
                 continue
-            if folded_run:
-                witnessed.append(brevity_code(folded_run))
-                folded_run = 0
             event = self._graph.node(node_id)
-            witnessed.append(self._witnessed_line(event))
-            said.extend(self._said_lines(event))
+            seen = self._witnessed_line(event)
+            heard = self._said_lines(event)
+            if folded_run:
+                # The code goes where the next written event goes, so the gap shows in the right place.
+                (said if heard else witnessed).append(brevity_code(folded_run))
+                folded_run = 0
+            if seen is not None:
+                witnessed.append(seen)
+            said.extend(heard)
         if folded_run:
-            witnessed.append(brevity_code(folded_run))
-        if not witnessed:
-            return ""
-        lines = [WITNESSED_HEADER, *witnessed]
+            (said if said else witnessed).append(brevity_code(folded_run))
+        sections: list[str] = []
+        if witnessed:
+            sections.append("\n".join([WITNESSED_HEADER, *witnessed]))
         if said:
-            lines += ["", SAID_HEADER, *said]
-        return "\n".join(lines)
+            sections.append("\n".join([SAID_HEADER, *said]))
+        return "\n\n".join(sections)
 
-    def _witnessed_line(self, event: Node) -> str:
+    def _witnessed_line(self, event: Node) -> str | None:
+        """The action of the turn; None for a turn that is only speech (its line is in the other section)."""
         speaker = _text(event, "speaker")
         action = _text(event, "action_text")
         speech = _text(event, "speech_text")
-        parts: list[str] = []
         if action:
             is_narration = not speaker or speaker == self._narrative.narrator
-            parts.append(action if is_narration else f"{self._who(speaker)}: *{action}*")
-        if speech:
-            parts.append(f"{self._who(speaker)} spoke to {describe_audience(event.visible_to, speaker, self._viewer)}")
-        observed = "; ".join(parts) if parts else event.text
+            observed = action if is_narration else f"{self._who(speaker)}: *{action}*"
+        elif speech:
+            return None
+        else:
+            observed = event.text
         return f"{_time(event)} {observed} <ref:{event.id}>"
 
     def _said_lines(self, event: Node) -> list[str]:
@@ -99,16 +109,14 @@ class ViewerLinearizer(GraphLinearizer):
         speech = _text(event, "speech_text")
         if not speech:
             return []
-        who = self._who(speaker)
         audience = describe_audience(event.visible_to, speaker, self._viewer)
-        claims = self._claims_of(event)
-        if not claims:
-            return [f'{_time(event)} {who} said to {audience}: "{speech}" <ref:{event.id}>']
-        lines: list[str] = []
-        for claim in claims:
-            verb = "denied to" if claim.attributes.get("claim_type") == ClaimType.DENIAL.value else "told"
-            status = _status_text(status_for(self._graph, claim.id))
-            lines.append(f'{_time(event)} {who} {verb} {audience}: "{claim.text}"{status} <ref:{claim.id}>')
+        lines = [f'{_time(event)} {self._who(speaker)} said to {audience}: "{speech}" <ref:{event.id}>']
+        for claim in self._claims_of(event):
+            view = status_for(self._graph, claim.id)
+            if view.status is ClaimStatus.UNVERIFIED:
+                continue
+            denied = "denied: " if claim.attributes.get("claim_type") == ClaimType.DENIAL.value else ""
+            lines.append(f'  - {denied}"{claim.text}"{_status_text(view)} <ref:{claim.id}>')
         return lines
 
     def _claims_of(self, event: Node) -> list[Node]:
@@ -132,8 +140,6 @@ def _is_more_salient(candidate: Visit, current: Visit) -> bool:
 
 
 def _status_text(view: ClaimView) -> str:
-    if view.status is ClaimStatus.UNVERIFIED:
-        return ""
     references = ", ".join(f"<ref:{node_id}>" for node_id in view.evidence)
     return f" [{view.status.value} by {references}]"
 

@@ -4,7 +4,7 @@ The scene (the magic example of the design's ontology decision):
 - e1, narration seen by Lia, Brom and Ceres: Lia disarms Brom in the hall.
 - e2, Brom to Dara: *picks up the wand* "Nobody attacked me, I dropped it."
   Two claims: e2.c1 (denial) "Someone attacked Brom", e2.c2 "Brom dropped the wand".
-  e1 refutes e2.c2 (INVALIDATES).
+  e1 refutes both: the denial (someone did attack Brom) and the assertion (INVALIDATES).
 - e3, Ceres to everyone: "I saw nothing." (no claim extracted)
 Dara never saw e1, so for her the claim is unverified; Brom saw it.
 """
@@ -72,6 +72,7 @@ def scene() -> GraphStore:
     graph.add_edge(Edge(source="e2", target="e2.c1", type="STATED"))
     graph.add_edge(Edge(source="e2", target="e2.c2", type="STATED"))
     graph.add_edge(Edge(source="e2", target="entity:brom", type="MENTIONS", attributes={"role": "ACTOR"}))
+    graph.add_edge(Edge(source="e1", target="e2.c1", type="INVALIDATES"))
     graph.add_edge(Edge(source="e1", target="e2.c2", type="INVALIDATES"))
     return graph
 
@@ -181,7 +182,7 @@ def test_supersedes_retracts_the_older_version_only() -> None:
 # --- two-section linearization ------------------------------------------------------------------
 
 
-def test_witness_of_the_proof_reads_own_claims_with_their_status() -> None:
+def test_witness_of_the_proof_reads_own_words_and_the_refuted_claims() -> None:
     graph = scene()
     linearizer = ViewerLinearizer(ViewerGraph(graph, "Brom"), WordCounter(), viewer="Brom")
     context = linearizer.linearize(route(), traversal(anchor("e2", 0.05), reached("e1", "e2", 2.5)))
@@ -189,46 +190,50 @@ def test_witness_of_the_proof_reads_own_claims_with_their_status() -> None:
         [
             "What you witnessed:",
             "<t:2024-03-01 20:00> Lia casts a disarming spell on Brom in the hall. <ref:e1>",
-            "<t:2024-03-01 20:01> You: *picks up the wand*; You spoke to {Dara} <ref:e2>",
+            "<t:2024-03-01 20:01> You: *picks up the wand* <ref:e2>",
             "",
             "What was said:",
-            '<t:2024-03-01 20:01> You denied to {Dara}: "Someone attacked Brom" <ref:e2.c1>',
-            '<t:2024-03-01 20:01> You told {Dara}: "Brom dropped the wand" [REFUTED by <ref:e1>] <ref:e2.c2>',
+            '<t:2024-03-01 20:01> You said to {Dara}: "Nobody attacked me, I dropped it." <ref:e2>',
+            '  - denied: "Someone attacked Brom" [REFUTED by <ref:e1>] <ref:e2.c1>',
+            '  - "Brom dropped the wand" [REFUTED by <ref:e1>] <ref:e2.c2>',
         ]
     )
     assert context.included == ("e1", "e2")
 
 
-def test_listener_who_missed_the_proof_reads_the_claim_without_status() -> None:
+def test_listener_who_missed_the_proof_reads_only_what_was_said() -> None:
     graph = scene()
     linearizer = ViewerLinearizer(ViewerGraph(graph, "Dara"), WordCounter(), viewer="Dara")
     context = linearizer.linearize(route(), traversal(anchor("e2", 0.05)))
-    assert "REFUTED" not in context.text
-    assert '<t:2024-03-01 20:01> Brom told {you}: "Brom dropped the wand" <ref:e2.c2>' in context.text
-    assert "<t:2024-03-01 20:01> Brom: *picks up the wand*; Brom spoke to {you} <ref:e2>" in context.text
+    assert context.text == "\n".join(
+        [
+            "What you witnessed:",
+            "<t:2024-03-01 20:01> Brom: *picks up the wand* <ref:e2>",
+            "",
+            "What was said:",
+            '<t:2024-03-01 20:01> Brom said to {you}: "Nobody attacked me, I dropped it." <ref:e2>',
+        ]
+    )  # both claims are UNVERIFIED for Dara, so no claim line
 
 
-def test_a_claim_reached_by_the_beam_brings_its_event_and_siblings() -> None:
+def test_a_claim_reached_by_the_beam_brings_its_event() -> None:
     graph = scene()
     linearizer = ViewerLinearizer(ViewerGraph(graph, "Dara"), WordCounter(), viewer="Dara")
     context = linearizer.linearize(route(), traversal(anchor("e3", 0.05), reached("e2.c2", "e3", 2.0)))
     assert context.included == ("e2", "e3")
-    assert "<ref:e2.c1>" in context.text and "<ref:e2.c2>" in context.text
+    assert '"Nobody attacked me, I dropped it." <ref:e2>' in context.text
 
 
-def test_speech_without_claims_is_written_whole_once() -> None:
+def test_turn_that_is_only_speech_has_no_witnessed_line() -> None:
     graph = scene()
     linearizer = ViewerLinearizer(graph, WordCounter())
     context = linearizer.linearize(route(), traversal(anchor("e3", 0.05)))
     assert context.text == "\n".join(
         [
-            "What you witnessed:",
-            "<t:2024-03-01 20:02> Ceres spoke to everyone <ref:e3>",
-            "",
             "What was said:",
             '<t:2024-03-01 20:02> Ceres said to everyone: "I saw nothing." <ref:e3>',
         ]
-    )
+    )  # as in a LoCoMo turn: the context is the turn as said
 
 
 def test_budget_folds_an_event_together_with_its_claims() -> None:

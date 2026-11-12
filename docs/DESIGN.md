@@ -416,10 +416,11 @@ Os tipos abaixo são declarados em `narrative/schema.py`, que estende o perfil `
 1. **Filtro duro de visibilidade** antes do RRF (máscara nos índices vetorial e BM25) e durante o beam (vizinho invisível é ignorado). Vazamento na recuperação = 0 por construção.
 2. **Status epistêmico relativo ao observador:** `status_for(viewer)` considera só as arestas `INVALIDATES/SUPPORTS/CONTRADICTS` cujo nó de origem é visível ao viewer. Quem não viu a prova continua achando a alegação "não verificada". É uma Teoria da Mente leve, sem grafo de crenças.
 3. **Linearização em duas seções:**
-   - `O que você presenciou`: o `action_text` do evento e o ato de fala ("B falou com {A, C}"), sem repetir o conteúdo.
-   - `O que foi dito`: as claims, com autor, público e status visto pelo viewer, ex.: `<t:12> B disse a {A,C}: "Eu estava no laboratório" [REFUTADA por <ref:e35>] <ref:c12>`.
+   - `O que você presenciou`: o `action_text` do evento (ou a narração). Um turno só de fala não tem linha aqui.
+   - `O que foi dito`: a fala do turno **como foi dita** (`speech_text`), com autor e público; embaixo dela, as claims cujo status visto pelo viewer é diferente de `UNVERIFIED`, com a prova. Ex.: `<t:12> B said to {A, C}: "I was in the lab all night." <ref:e12>` e, na linha seguinte, `  - "B was in the lab" [REFUTED by <ref:e35>] <ref:e12.c1>`.
+   - **Por que a fala original, e não as claims:** a claim é uma paráfrase do LLM e pode perder a data, o nome ou o número que a pergunta cobra. Com o texto do turno, o contexto da B fica igual ao da A, a não ser pelo que a visibilidade e o status acrescentam, e a diferença medida entre as duas vem da estrutura, não da compressão da extração (H2). As claims continuam no grafo, com vetor próprio para a busca, e são a base do status. *Descartada:* escrever só as claims, o que punha o conteúdo uma vez só, mas na paráfrase.
    - O status só é impresso quando é diferente de `UNVERIFIED`. Em benchmarks só de fala (LoCoMo, FANToM) quase tudo é claim não verificada; marcar todas gastaria tokens e induziria o LLM a desconfiar de tudo, o que prejudicaria a retenção (H2).
-   - Para o mentiroso, as próprias claims aparecem como "você disse X a {…}" → base da consistência de engano (DCR).
+   - Para o mentiroso, a própria fala aparece como "You said to {…}" → base da consistência de engano (DCR).
 4. **Router:** as mesmas 3 intenções; as arestas novas herdam o peso `w_Tq` da sua camada (D9), sem hiperparâmetro novo (ex.: `INVALIDATES`/`CONTRADICTS` são `CAUSAL`, peso alto em WHY; `SUPERSEDES` é `TEMPORAL`, peso alto em WHEN; `MENTIONS` é `ENTITY`, peso alto em ENTITY). A aresta de ancoragem `STATED` não tem peso. Router idêntico nas duas arquiteturas (variável controlada).
 
 ### 7.5 Agentes
@@ -473,11 +474,10 @@ narrative/
 - **C.1 estendido:** o C.1 do artigo com dois campos a mais, `roles[{entity, role}]` e `claims[{statement, about, type}]`, na mesma chamada. A entrada troca `Text` por `Audience`, `Action` e `Speech`. Papel desconhecido vira `OTHER`, tipo desconhecido vira `ASSERTION`. Numa negação, o `statement` é a proposição negada ("Someone attacked Brom", `type=DENIAL`). Claims só são criadas quando há fala, mesmo que o LLM devolva alguma para um turno só de ação. Ids: `e12.c1`, `e12.c2`…
 - **Consulta por viewer:** os Stages 1–4 do perfil `magma` rodam sem mudança sobre a visão do viewer (`ViewerGraph` e índices com máscara). O nó invisível nunca é acerto nos canais vetorial, lexical ou temporal, nunca é vizinho no beam e nunca conta como prova no status. Os vetores das entidades, calculados na consulta, são compartilhados entre os viewers. `viewer=None` lê o grafo inteiro.
 - **Precedência do status** quando as provas discordam: `REFUTED` > `SUPPORTED` > `RETRACTED` > `CONTESTED` > `UNVERIFIED`. Fato antes de fala, porque fala nunca é prova. `CONTRADICTS` conta nos dois sentidos; `INVALIDATES`, `SUPPORTS` e `SUPERSEDES` contam só na claim para onde apontam (a versão nova de `SUPERSEDES` continua `UNVERIFIED`).
-- **Linearização:**
-  - "What you witnessed": `<t:τ> B: *ação*; B spoke to {Dara} <ref:e2>` (narração: só a ação);
-  - "What was said": `<t:τ> B told {you}: "…" [REFUTED by <ref:e1>] <ref:e2.c2>`; negação como `denied to`; o viewer aparece como `You`/`you`.
-  - **Fala sem claim extraída** (cumprimento, pergunta, falha da extração) é escrita inteira uma vez, na seção "What was said". Sem isso o conteúdo do turno sumiria do contexto.
-  - Uma claim alcançada pelo beam traz o evento dela, com a mais saliente das duas visitas, e o evento traz todas as suas claims. O budgeting corta o evento com as claims, e o código de brevidade fica na primeira seção.
+- **Linearização (decidido, §7.4):**
+  - "What you witnessed": `<t:τ> B: *ação* <ref:e2>`; narração: só a ação. Turno só de fala não tem linha nesta seção (a linha da fala já diz quem falou e para quem).
+  - "What was said": `<t:τ> B said to {you}: "<fala como foi dita>" <ref:e2>`, e embaixo, só para claims com status: `  - "Brom dropped the wand" [REFUTED by <ref:e1>] <ref:e2.c2>`; negação como `  - denied: "…"`. O viewer aparece como `You`/`you`.
+  - Uma claim alcançada pelo beam traz o evento dela, com a mais saliente das duas visitas. O budgeting corta o evento com as claims; o código de brevidade vai para a seção do próximo evento escrito.
 - **Consequência para o commit 18:** como o `statement` de uma negação é a proposição negada, a regra do NLI precisa ler o rótulo junto com o tipo: um fato que `supports` uma claim `DENIAL` gera `INVALIDATES`, e um que a refuta gera `SUPPORTS`.
 - **Ainda não implementado:** a detecção de contradição (18). Até ele, nenhum grafo construído tem `INVALIDATES`, `SUPPORTS`, `CONTRADICTS` ou `SUPERSEDES`, e toda claim fica `UNVERIFIED`; o status por viewer está implementado e testado em grafos montados à mão. Também faltam `narrative-min` e as ablações da §7.6 (retomadas depois, §10.2).
 

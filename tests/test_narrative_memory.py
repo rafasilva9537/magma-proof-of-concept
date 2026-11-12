@@ -70,7 +70,7 @@ def test_each_viewer_is_answered_from_what_they_saw() -> None:
         assert dara["viewer"] == "Dara"
         assert dara["included"] == ["e2"]
         assert "disarming" not in str(dara["context"])
-        assert '"Brom dropped the wand"' in str(dara["context"])
+        assert '"Nobody attacked me, I dropped the wand."' in str(dara["context"])
 
         assert lia["included"] == ["e1"]
         assert "wand" not in str(lia["context"]).replace("disarming spell", "")  # Lia never heard Brom
