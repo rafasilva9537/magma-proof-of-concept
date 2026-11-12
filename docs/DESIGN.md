@@ -184,7 +184,7 @@ Referência: Jiang, D.; Li, Y.; Li, G.; Li, B. *MAGMA: A Multi-Graph based Agent
 
 ## 4. Auditoria do código oficial
 
-Alvo: `FredJiang0324/MAGMA` @ commit `467cb70` (~14k linhas Python). Caminhos abaixo são relativos à raiz desse repositório.
+Alvo: `FredJiang0324/MAGMA` @ commit `467cb70` (~14k linhas Python). Caminhos abaixo são relativos à raiz desse repositório, e as linhas são as do commit público: `arquivo.py:N` abre em `https://github.com/FredJiang0324/MAGMA/blob/467cb70/arquivo.py#LN`.
 
 ### 4.1 Divergências entre artigo e código (verificadas)
 
@@ -192,11 +192,11 @@ Alvo: `FredJiang0324/MAGMA` @ commit `467cb70` (~14k linhas Python). Caminhos ab
 |---|---|---|
 | 1 | Beam Search do Alg. 1 é código morto | `memory/query_engine.py:1002` define `_probabilistic_beam_search`; **zero chamadas** |
 | 2 | Classificador `{WHY,WHEN,ENTITY}` é código morto; o roteador real tem 9 classes por regex | `detect_query_intent` (`query_engine.py:225`) nunca chamado; `detect_query_type` (`:247`) chamado em `:700` |
-| 3 | Fast/Slow path dual-stream é código morto | `memory/trg_memory.py:488` e `:549` só definidos, nunca chamados |
-| 4 | Arestas `ENTITY` não existem no grafo construído | Única instância de `LinkType.ENTITY` em `trg_memory.py:667` (dentro do slow path morto); o builder grava `SEMANTIC/SAME_ENTITY` (`memory/memory_builder.py:753-755`) |
+| 3 | Fast/Slow path dual-stream é código morto | `memory/trg_memory.py:486` e `:547` só definidos, nunca chamados |
+| 4 | Arestas `ENTITY` não existem no grafo construído | Única instância de `LinkType.ENTITY` em `trg_memory.py:665` (dentro do slow path morto); o builder grava `SEMANTIC/SAME_ENTITY` (`memory/memory_builder.py:753-755`) |
 | 5 | Arestas causais vêm de regras sintáticas (troca de falante, `?`), não de LLM | `memory_builder.py:671-713` (`RESPONSE_TO`), `:839` (`ANSWERED_BY`) |
 | 6 | Mapa fixo de tópicos → sessões do LoCoMo | `query_engine.py:174-180` (`'may': [1], 'july': [6,7,8,10]...`) — vazamento de benchmark |
-| 7 | Uso do rótulo oracle `category == 5` no juiz, formatter e métricas | `memory/llm_judge.py:83`, `memory/answer_formatter.py:612,768`, `utils/utils.py:217` — contradiz "no oracle labels" (Ap. C.2) |
+| 7 | Uso do rótulo oracle `category == 5` no juiz, formatter e métricas | `memory/llm_judge.py:73`, `memory/answer_formatter.py:612,768`, `utils/utils.py:217` — contradiz "no oracle labels" (Ap. C.2) |
 | 8 | Heurísticas regex específicas para o LongMemEval | `test_longmemeval_chunked.py:127,223` ("CRITICAL for reaching 80% accuracy") |
 
 ### 4.2 Nem o código morto segue o artigo
@@ -206,7 +206,9 @@ Alvo: `FredJiang0324/MAGMA` @ commit `467cb70` (~14k linhas Python). Caminhos ab
 - Não é beam por profundidade (é best-first com heap global, sem `MaxDepth`).
 - Pesos `w_Tq` (0.05–0.7) e `λ1=0.6` ≠ Tabela 6 (`w` 0.5–6.0, `λ1=1.0`).
 - **Bug:** o corte do beam faz `heappop` num heap de scores negativos → remove o **melhor** candidato, não o pior.
-- `get_neighbors` percorre arestas nos dois sentidos (inclusive causais) → a direção causal se perde.
+- Score inicial `1/(k+1)` igual para todas as âncoras: a ordem do RRF se perde.
+
+Percorrer os vizinhos nos dois sentidos (`get_neighbors`) **não** é divergência: a linha 8 do Alg. 1 diz só `G.NEIGHBORS(u)`, sem sentido, e esta implementação faz o mesmo (§6.4).
 
 ### 4.3 O que ainda tem valor
 | Item | Uso |
@@ -224,7 +226,7 @@ Alvo: `FredJiang0324/MAGMA` @ commit `467cb70` (~14k linhas Python). Caminhos ab
   - os construtores recebem argumentos que não existem: `MemoryBuilder(trg_memory=…, model=…)` (`main.py:58`; o real recebe `cache_dir, llm_model`, `memory/memory_builder.py:33`), `QueryEngine(trg=…, model=…)` (`main.py:64`; o real recebe `trg_memory, node_index`, `memory/query_engine.py:30`), `TestHarness(trg=…, …)` (`main.py:71`; `memory/test_harness.py:32`) e `Evaluator(model=…)` (`main.py:77`; `memory/evaluator.py:31`);
   - chama métodos que não existem: `format_context`, `run_tests`, `evaluate_results`, `save_to_file` e `load_from_file` (os reais são `save`/`load`, `memory/trg_memory.py:916` e `:934`).
 - **Nenhum arquivo importa `TRGSystem`**, e o README só documenta os scripts de benchmark.
-- **As entradas que funcionam são os scripts de benchmark** (`test_fixed_memory.py:335` e `test_longmemeval_chunked.py`), que montam os componentes à mão (`test_fixed_memory.py:448-498`).
+- **As entradas que funcionam são os scripts de benchmark** (`test_fixed_memory.py:335` e `test_longmemeval_chunked.py`), que montam os componentes à mão (`test_fixed_memory.py:447-497`).
 - **Não há interface interativa:** nenhum ponto do código lê entrada do usuário.
 - → Este projeto expõe a memória por um console em cada arquitetura (§6.2, §7.5), além do runner.
 
@@ -342,6 +344,7 @@ tests/           # testes unitários de RRF, beam search e linearização com gr
 | Saída inválida do LLM no slow path | Sem nova tentativa: o evento recebe `consolidation_errors` e a consolidação segue; a taxa entra na medição | Repetir a requisição devolveria a resposta do cache; repetir com o erro na conversa gastaria chamadas fora da medição |
 | θ_sim (aresta SEMANTIC) = `Sim. Threshold` da Tab. 6 | Limiar da aresta `SEMANTIC`, com no máximo 5 vizinhos por nó. **θ_sim = 0.75**, medido com o Qwen3 nas duas primeiras conversas do LoCoMo (vetor de "Falante: texto", como o `ENCODER(n.c)` do Alg. 2): entre turnos de uma conversa, mediana 0.54, p95 0.71, p99 0.78. Com 0.75 (≈ p97–98), cada evento novo ganha em média ~2,2–2,6 arestas e ~70% ganham ao menos uma; com 0.6, 92% batiam o limite de 5 e o limiar não filtrava. Nenhum valor separa assunto de estilo nesse dataset (pares de "Thanks, Caroline!" passam de 0.8); a relevância à pergunta fica com o `λ2·sim` da travessia. Regra para outro embedding: ≈ percentil 97–98 dos cossenos entre turnos de uma conversa, medido com `bench/calibrate_semantic_threshold.py` | Único limiar de similaridade definido no texto (§3.2). O intervalo 0.10–0.30 é do MiniLM e, com outro embedding, ligaria quase todos os pares. Descartadas: piso de similaridade na travessia (como no código oficial; duplica o termo `λ2·sim` da Eq. 5 e não está no Alg. 1) e piso do canal vetorial (sem apoio no texto) |
 | Drop threshold 0.15 | Piso absoluto: descarta o vizinho com `sim(n_j,q) < 0.15`, para eventos e entidades. Conferido na menor conversa do LoCoMo (105 perguntas, `bench/measure_retrieval.py`): o cosseno pergunta–evento tem p1 = 0,17 e mediana 0,43, e pergunta–nome de entidade p1 = 0,14 e mediana 0,28; 0,4% dos pares pergunta–evento e 1,6% dos pares pergunta–entidade ficam abaixo de 0,15, e o piso descarta 0,29% dos passos avaliados na travessia | Leitura mais simples de "drop"; com embeddings de cosseno alto funciona como rede de segurança, e a medição confirma esse papel: só corta vizinhos quase sem relação com a pergunta. Descartadas: queda relativa por passo (como no código oficial; regra que o artigo não descreve) e não usar (Alg. 1 literal; quase equivalente, já que o piso raramente dispara) |
+| Sentido das arestas na travessia (a linha 8 do Alg. 1 percorre `G.NEIGHBORS(u)` sem dizer o sentido) | Os vizinhos pelas arestas **nos dois sentidos**, em todas as camadas ativas. A direção continua gravada na aresta (causa → efeito) e é usada na ordenação topológica do Stage 4 (WHY) | Uma pergunta WHY em geral alcança primeiro o efeito, e a causa está na aresta que chega a ele: só o sentido de saída levaria do efeito às consequências, nunca à causa. O código oficial também percorre os dois sentidos (`graph_db.py:417-440`). Descartado: só o sentido da aresta (perderia as causas a partir do efeito) |
 | Instrução do embedding (Qwen3) | Só na query: `Instruct: Given a question about a conversation, retrieve the memory entries that answer it
 Query:`; textos armazenados sem prefixo | Formato do modelo; a tarefa descreve o uso real (pergunta → entrada de memória) |
 | Orçamento de contexto | ~2.5k tokens, contados com o tokenizador do modelo de embedding (Qwen3) | Na ordem dos 3.37k tokens/query da Tab. 3. O tokenizador já está carregado, é local e determinístico; não é o do LLM, então o orçamento é aproximado, e os tokens reais de cada consulta vêm da API (Tab. 3). Descartados: `tiktoken` (o do gpt-4o-mini do artigo; uma dependência a mais para uma aproximação equivalente) e caracteres ÷ 4 (impreciso) |
@@ -594,7 +597,7 @@ Todos usam o **mesmo prompt de persona, mesmo LLM e mesmas sondas**; só muda a 
   - **Terminologia:** "busca exata" aqui = **k-NN exato** sobre embeddings (compara a query com *todos* os vetores e devolve os k mais próximos de verdade), em oposição ao **k-NN aproximado** (HNSW/IVF: atalhos que podem perder vizinhos verdadeiros). **As duas são busca semântica** ("guerra" encontra "conflito"). Não confundir com busca **lexical** (BM25, palavra igual), que é outro canal do MAGMA. FAISS é biblioteca de busca por similaridade em memória, não é banco de dados nem "RAG" (RAG é o padrão recuperar → gerar).
   - **Os 3 canais de recuperação do artigo (Stage 2, Eq. 4):** semântico (embedding denso + índice vetorial), lexical (keywords esparsas) e temporal (janela `[τs, τe]`), fundidos por RRF. Cada canal cobre a falha do outro: o semântico acha sinônimos e paráfrases; o lexical acha nomes próprios e termos raros ("Épsilon-4", "chip").
   - **Onde o índice vetorial entra no artigo:** Eq. 3 (`v_i` indexado no vector DB, citando FAISS); Alg. 2 (`VDB.ADD` no fast path); Stage 2 (`V.SEARCH(v_q)`, top-K = 20, canal semântico do RRF); grafo semântico (`cos(v_i,v_j) > θ_sim` exige achar os vizinhos mais próximos de cada nó). Stage 3 (`sim(v_j, v_q)` no beam) só lê o vetor do nó pelo id, sem busca.
-  - **Onde entra no código oficial:** `memory_builder.py:645` (`create_semantic_links`, k-NN para arestas `SEMANTIC`); `trg_memory.py:262` (`query`, âncoras, chamado em `query_engine.py:738`); `add_vector` na ingestão (`memory_builder.py:350`; `:400` para os resumos de sessão, que não estão no artigo).
+  - **Onde entra no código oficial:** `memory_builder.py:645` (`create_semantic_links`, k-NN para arestas `SEMANTIC`); `trg_memory.py:260` (`query`, âncoras, chamado em `query_engine.py:738`); `add_vector` na ingestão (`memory_builder.py:350`; `:400` para os resumos de sessão, que não estão no artigo).
   - **Onde entra nesta implementação:** (1) canal semântico das âncoras (Stage 2); (2) arestas `SEMANTIC` no fast path; (3) Arquitetura B: candidatos para a detecção de contradição (claims parecidas); (4) baseline C2. O beam só lê vetores por id.
   - **Modo usado:** o artigo cita FAISS (Johnson et al., 2019), mas **não informa o tipo de índice**. O código oficial usa por padrão o **índice exato**: `FAISSVectorDB(index_type="flat")` → `IndexFlatL2` (`memory/vector_db.py:136,158`); a factory `backend="auto"` escolhe FAISS se instalado e, se não, NumPy de força bruta, também exato. IVF/HNSW existem no código, mas não são o padrão. Como o MiniLM gera vetores normalizados, ordenar por distância L2 dá o mesmo resultado que ordenar por cosseno.
   - **Recomendação:** FAISS `IndexFlatIP` (produto interno sobre vetores normalizados = cosseno; mesma ordenação do `IndexFlatL2` do código, mas devolve o cosseno direto, que é o que θ_sim e `sim(·)` usam), k-NN exato, igual para todas as arquiteturas; o baseline C2 pluga o mesmo índice no LlamaIndex.
