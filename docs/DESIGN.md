@@ -6,7 +6,7 @@
 > **Status:** análise concluída. **Decisão principal:** reimplementar o MAGMA do zero, fiel ao artigo (§5).
 > **Decididas (todas):** D1 (benchmarks por requisito; modos `sample` e `report`), D2 (router determinístico com modelo de decisão local), D3 (GLM 5.3 Flash + juiz DeepSeek V4.1 Flash; segundo juiz a escolher), D4 (baselines), D5 (inglês), D6 (sem framework de LLM), D7 (FAISS exato), D8 (Qwen3-Embedding-0.6B), D9 (perfil `narrative`). Premissa da avaliação: comparação controlada entre as implementações do projeto; o artigo é referência (D1).
 > **A verificar na implementação:** se o canal temporal do RRF ganha com as `dates_mentioned` além do τ (decidido τ ou datas, §6.4; na menor conversa do LoCoMo só 4 perguntas têm janela e evidência, poucas para concluir; a medição se repete com as demais conversas); se o LongMemEval-KU entra no RF3 (D1).
-> **Próximo passo:** commits 1–14 do plano (§10.2) implementados; a menor conversa do LoCoMo construída e respondida (run `sample`). Portão de custo do commit 15 fechado: 50 candidatas no prompt causal (§6.4), provedor mantido (D3) e construção das conversas em paralelo (§10.2). Snapshot de regressão gravado e tag `v-original` (§10.1); conversas do LoCoMo em construção com o limite. Segue a Arquitetura B mínima, na ordem de execução da §10.2. O plano foi reagrupado de 42 para 26 commits, com o runner antes da recuperação.
+> **Próximo passo:** commits 1–14 do plano (§10.2) implementados; a menor conversa do LoCoMo construída e respondida (run `sample`). Portão de custo do commit 15 fechado: 50 candidatas no prompt causal (§6.4), provedor mantido (D3) e construção das conversas em paralelo (§10.2). Snapshot de regressão gravado e tag `v-original` (§10.1); as 10 conversas do LoCoMo construídas com o limite (Arquitetura A). Arquitetura B mínima implementada (§7.7: perfil `narrative`, cena, claims, consulta por viewer e linearização em duas seções; sem o NLI do commit 18). Segue o C1 Full Context, na ordem de execução da §10.2. O plano foi reagrupado de 42 para 26 commits, com o runner antes da recuperação.
 > **Regra da §9:** toda decisão registra recomendação, justificativa, alternativas comparadas e por que cada uma foi descartada (material direto para o artigo). Sem tom de roteiro de apresentação.
 > **Regra de escopo (PoC):** implementar tudo o que o artigo descreve e tudo o que a extensão exige; só otimizações e extras vão para a §12.
 >
@@ -446,6 +446,41 @@ Os tipos abaixo são declarados em `narrative/schema.py`, que estende o perfil `
 - `narrative-min` (sem `role` em `MENTIONS` e sem `Claim.type`) → mede o ganho dos papéis (D9).
 - Espelha as Tabs. 4 e 5 do artigo, que a Arquitetura A também reproduz (§6.5).
 
+### 7.7 Implementação mínima (commits 17 e 19 juntos)
+**Layout:**
+```
+narrative/
+  config.py     # NarrativeConfig: nome do narrador (turno de narração: fato do mundo, sem ator e sem claim)
+  schema.py     # perfil `narrative`: nós EVENT, CLAIM (faceta), ENTITY; 9 arestas (§7.2); MentionRole, ClaimType, ClaimStatus
+  scene.py      # sem LLM: visible_to pelo `present` do turno, separação action_text/speech_text, texto do público
+  ingest.py     # NarrativeFastPath (Alg. 2 + cena + MENTIONS{ACTOR}) e NarrativeConsolidation (Alg. 3 + C.1 estendido)
+  status.py     # status_for(view, claim): status pelo efeito epistêmico das arestas que o viewer vê
+  view.py       # ViewerGraph (GraphStore só de leitura com os nós visíveis) e índices com máscara
+  linearize.py  # ViewerLinearizer: Stage 4 em duas seções, facetas presas ao evento
+  memory.py     # NarrativeMemory: a fachada do MAGMA com consulta por viewer
+```
+**Ganchos no `magma/`** (inoperantes no perfil `magma`; o teste de regressão continua passando):
+- `Turn.present` (padrão: todos). O perfil `magma` ignora o campo: o artigo não tem observadores.
+- `MemorySystem.query(question, reference_time, viewer=None)`. A `MagmaMemory` responde igual para qualquer viewer: é o grupo de controle sem visibilidade (§8.5), e o vazamento dela é parte do que se mede.
+- `SlowPathConsolidation._link_extraction` (o que a extração acrescenta ao grafo) e `GraphLinearizer._events` (quais visitas viram blocos): pontos de extensão sem mudança de comportamento.
+
+**Como cada parte da §7.2–§7.4 ficou no código:**
+- **Visibilidade:** `visible_to = present ∪ {falante}`; o narrador não é observador; `present = {"*"}` é a cena aberta (LoCoMo). A claim herda o `visible_to` do evento.
+- **Ação × fala:** só o que está marcado como ação (`*…*`) é ação; todo o resto é fala, porque só a ação vale como prova. Turno sem marcas (LoCoMo) fica como foi escrito; turno que é uma citação inteira perde as aspas; turno de narração é todo ação. O vetor do evento continua sendo o do turno inteiro.
+- **Ator:** o fast path cria a entidade do falante (`kind=agent`) e a aresta `MENTIONS{role=ACTOR}` antes de pôr o evento na fila.
+- **Escritas concorrentes:** no perfil `magma` só o fast path indexa e só o slow path cria entidades. Aqui o fast path também cria entidades (o ator) e o slow path também indexa (as claims), em threads diferentes; criação de entidade e todo "busca e insere" nos índices passam por uma trava comum.
+- **`SIMILAR_TO`:** o fast path compara o evento só com eventos anteriores (as claims estão no mesmo índice vetorial); o slow path compara cada claim só com claims anteriores, com o mesmo θ_sim e o mesmo máximo de vizinhos. Evento e claim nunca são ligados por similaridade.
+- **C.1 estendido:** o C.1 do artigo com dois campos a mais, `roles[{entity, role}]` e `claims[{statement, about, type}]`, na mesma chamada. A entrada troca `Text` por `Audience`, `Action` e `Speech`. Papel desconhecido vira `OTHER`, tipo desconhecido vira `ASSERTION`. Numa negação, o `statement` é a proposição negada ("Someone attacked Brom", `type=DENIAL`). Claims só são criadas quando há fala, mesmo que o LLM devolva alguma para um turno só de ação. Ids: `e12.c1`, `e12.c2`…
+- **Consulta por viewer:** os Stages 1–4 do perfil `magma` rodam sem mudança sobre a visão do viewer (`ViewerGraph` e índices com máscara). O nó invisível nunca é acerto nos canais vetorial, lexical ou temporal, nunca é vizinho no beam e nunca conta como prova no status. Os vetores das entidades, calculados na consulta, são compartilhados entre os viewers. `viewer=None` lê o grafo inteiro.
+- **Precedência do status** quando as provas discordam: `REFUTED` > `SUPPORTED` > `RETRACTED` > `CONTESTED` > `UNVERIFIED`. Fato antes de fala, porque fala nunca é prova. `CONTRADICTS` conta nos dois sentidos; `INVALIDATES`, `SUPPORTS` e `SUPERSEDES` contam só na claim para onde apontam (a versão nova de `SUPERSEDES` continua `UNVERIFIED`).
+- **Linearização:**
+  - "What you witnessed": `<t:τ> B: *ação*; B spoke to {Dara} <ref:e2>` (narração: só a ação);
+  - "What was said": `<t:τ> B told {you}: "…" [REFUTED by <ref:e1>] <ref:e2.c2>`; negação como `denied to`; o viewer aparece como `You`/`you`.
+  - **Fala sem claim extraída** (cumprimento, pergunta, falha da extração) é escrita inteira uma vez, na seção "What was said". Sem isso o conteúdo do turno sumiria do contexto.
+  - Uma claim alcançada pelo beam traz o evento dela, com a mais saliente das duas visitas, e o evento traz todas as suas claims. O budgeting corta o evento com as claims, e o código de brevidade fica na primeira seção.
+- **Consequência para o commit 18:** como o `statement` de uma negação é a proposição negada, a regra do NLI precisa ler o rótulo junto com o tipo: um fato que `supports` uma claim `DENIAL` gera `INVALIDATES`, e um que a refuta gera `SUPPORTS`.
+- **Ainda não implementado:** a detecção de contradição (18). Até ele, nenhum grafo construído tem `INVALIDATES`, `SUPPORTS`, `CONTRADICTS` ou `SUPERSEDES`, e toda claim fica `UNVERIFIED`; o status por viewer está implementado e testado em grafos montados à mão. Também faltam `narrative-min` e as ablações da §7.6 (retomadas depois, §10.2).
+
 ---
 
 ## 8. Benchmarks e avaliação
@@ -879,7 +914,7 @@ Correspondência com o plano anterior (42 commits): 11 → 11; 18 + 19 + 20 + 22
 **Congelamento da ingestão.** A partir do portão de custo, a ingestão da Arquitetura A (fast path, slow path, prompt C.1 e prompt causal) não muda: só o código de consulta é alterado. Uma mudança na ingestão depois disso refaz todos os grafos e é registrada como tal.
 
 **Ordem de execução a partir do commit 15 (escopo reduzido; a Arquitetura B é a contribuição e vem primeiro):**
-1. *Arquitetura B mínima* (commits 17 e 19 num só): perfil `narrative`, `visible_to` pelo metadado de cena, `action_text`/`speech_text`, C.1 estendido com claims e `STATED`, consulta com espectador (filtro duro nos índices e no beam, `status_for(viewer)`) e linearização em duas seções. Mede RF1 e RF2.
+1. *Arquitetura B mínima* (commits 17 e 19 num só, mensagem `Add narrative memory scoped to the viewer`; **implementado**, §7.7): perfil `narrative`, `visible_to` pelo metadado de cena, `action_text`/`speech_text`, C.1 estendido com claims e `STATED`, consulta com espectador (filtro duro nos índices e no beam, `status_for(viewer)`) e linearização em duas seções. Mede RF1 e RF2.
 2. *C1 Full Context* (parte do commit 16): transcrição inteira e variante só com os turnos visíveis; o runner passa a escolher o sistema e a ablação.
 3. *Cenário diagnóstico e sondas* (commit 21): formato da §8.3, cenário Épsilon-4 com gabarito e execução das sondas; runs em B, A, C1 e C1 visível.
 4. *Métricas reduzidas* (commit 22): RLR, ELR e FUD no cenário; nota do juiz no LoCoMo; IC e testes da §8.4.

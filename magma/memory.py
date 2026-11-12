@@ -75,11 +75,15 @@ class MemorySystem(ABC):
     def consolidate(self) -> None:
         """Finish all pending background work (the slow path), so a question sees every turn already given."""
 
-    def query(self, question: str, reference_time: datetime) -> MemoryAnswer:
-        """Answer `question` as of `reference_time` (the "now" used to read relative dates in it)."""
+    def query(self, question: str, reference_time: datetime, viewer: str | None = None) -> MemoryAnswer:
+        """Answer `question` as of `reference_time` (the "now" used to read relative dates in it).
+
+        `viewer` is the character asking, for memories that know who saw what; `None` is the
+        omniscient reader. A memory without observers answers the same for every viewer.
+        """
         usage_before = self.usage()
         start = time.perf_counter()
-        reply = self._answer(question, reference_time)
+        reply = self._answer(question, reference_time, viewer)
         latency_s = time.perf_counter() - start
         return MemoryAnswer(answer=reply.answer, trace=reply.trace, usage=self.usage().since(usage_before), latency_s=latency_s)
 
@@ -98,7 +102,7 @@ class MemorySystem(ABC):
     def _add_turn(self, turn: Turn) -> None: ...
 
     @abstractmethod
-    def _answer(self, question: str, reference_time: datetime) -> Reply: ...
+    def _answer(self, question: str, reference_time: datetime, viewer: str | None) -> Reply: ...
 
 
 class _ConsolidationWorker:
@@ -230,7 +234,8 @@ class MagmaMemory(MemorySystem):
         self._fast_path.ingest(turn)
         self._worker.notify()
 
-    def _answer(self, question: str, reference_time: datetime) -> Reply:
+    def _answer(self, question: str, reference_time: datetime, viewer: str | None) -> Reply:
+        """The paper's memory has no observers: every viewer gets the omniscient answer."""
         route = self._router.route(question, reference_time)
         retrieval = self._retriever.retrieve(route)
         synthesized = self._synthesizer.synthesize(route, retrieval.context)

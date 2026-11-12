@@ -51,7 +51,7 @@ class ScriptedMemory(MemorySystem):
     def _add_turn(self, turn: Turn) -> None:
         self.log.append(f"turn {turn.text}")
 
-    def _answer(self, question: str, reference_time: datetime) -> Reply:
+    def _answer(self, question: str, reference_time: datetime, viewer: str | None) -> Reply:
         self.log.append(f"query {question} @ {reference_time:%Y-%m-%d}")
         self._usage.add(LLMResult(text="", prompt_tokens=1_000, completion_tokens=100, reasoning_tokens=0, latency_s=0.5, cached=False))
         return Reply(answer=self.answers.get(question, "Information not found"), trace={"intent": "ENTITY"})

@@ -430,7 +430,7 @@ class GraphLinearizer:
         self._config = config
 
     def linearize(self, route: RouterOutput, traversal: Traversal) -> LinearContext:
-        events = [visit for visit in traversal.visits if self._is_event(visit.node_id)]
+        events = self._events(traversal)
         ordered = self._order(route.intent, events)
         least_salient_first = [visit.node_id for visit in reversed(salience_order(events))]
         omitted: list[str] = []
@@ -447,6 +447,10 @@ class GraphLinearizer:
             omitted=tuple(omitted),
             tokens=tokens,
         )
+
+    def _events(self, traversal: Traversal) -> list[Visit]:
+        """The visits written as blocks: the anchors the traversal kept."""
+        return [visit for visit in traversal.visits if self._is_event(visit.node_id)]
 
     def _order(self, intent: Intent, events: list[Visit]) -> list[str]:
         match intent:

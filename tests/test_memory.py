@@ -40,7 +40,7 @@ class RecordingMemory(MemorySystem):
     def _add_turn(self, turn: Turn) -> None:
         self.turns.append(turn)
 
-    def _answer(self, question: str, reference_time: datetime) -> Reply:
+    def _answer(self, question: str, reference_time: datetime, viewer: str | None) -> Reply:
         self._usage.add(LLMResult(text="", prompt_tokens=100, completion_tokens=10, reasoning_tokens=0, latency_s=0.5, cached=False))
         return Reply(answer=f"answer to {question}", trace={"turns_seen": len(self.turns)})
 

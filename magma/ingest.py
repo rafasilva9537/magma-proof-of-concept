@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from magma.config import DEFAULT, IngestConfig, Layer, TemporalConfig
 from magma.embed import Embedder, Vector
-from magma.graph import Edge, GraphStore, Node
+from magma.graph import VISIBLE_TO_EVERYONE, Edge, GraphStore, Node
 from magma.index import LexicalIndex, VectorIndex
 from magma.json_types import JSONObject, JSONValue
 from magma.llm import ContextWindowExceeded, InvalidStructuredOutput, LLMClient, Message
@@ -36,6 +36,9 @@ class Turn:
     speaker: str
     text: str
     timestamp: datetime
+    # Who is in the scene when the turn happens. The paper has no observers, so the magma profile ignores it;
+    # the narrative profile reads it as the turn's visibility.
+    present: frozenset[str] = VISIBLE_TO_EVERYONE
 
 
 class OutOfOrderTurn(ValueError):
@@ -247,7 +250,7 @@ class SlowPathConsolidation:
         resolved: list[TemporalMention] = []
         unresolved: list[str] = []
         if extraction is not None:
-            entities, new_entities = self._link_entities(event, extraction.entities)
+            entities, new_entities = self._link_extraction(event, extraction)
             resolved, unresolved = self._resolve_dates(event, extraction.dates_mentioned)
             attributes.update(_extraction_attributes(extraction, resolved, unresolved))
 
@@ -294,6 +297,14 @@ class SlowPathConsolidation:
             if isinstance(summary, str) and summary:
                 return summary
         return NO_CONTEXT
+
+    def _link_extraction(self, event: Node, extraction: EventExtraction) -> tuple[list[str], list[str]]:
+        """What the extraction adds to the graph; here, the entities and their MENTIONS edges.
+
+        Returns the ids of the entities the event mentions and of the ones created for it. A
+        profile that extracts more (such as claims) extends this step and `_extract`.
+        """
+        return self._link_entities(event, extraction.entities)
 
     def _link_entities(self, event: Node, names: list[str]) -> tuple[list[str], list[str]]:
         """One ENTITY node per entity key, shared by every event that mentions it, and a MENTIONS edge to it."""
