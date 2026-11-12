@@ -21,6 +21,11 @@ spent passes it. Samples are stratified by question category, drawn with a
 fixed seed, and do not depend on the memory under test, so every system gets
 the same questions. `--build-only` builds the memories and asks nothing.
 
+`--system` picks the memory under test (MAGMA, MAGMA Narrativa, or the Full
+Context baseline with every turn or only the viewer's), and `--ablation` runs a
+graph memory with one component removed (Tabs. 4 and 5); the questions and the
+judge stay the same.
+
     python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json --build-only
     python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json --mode report --max-cost-usd 20 \\
         --llm-prices <input> <output> --judge-prices <input> <output>
@@ -48,17 +53,20 @@ from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
 
+from baselines.full_context import FullContextMemory
 from bench.benchmark import Conversation, Question
 from bench.judge import Judge
 from bench.lexical_metrics import bleu1, token_f1
 from bench.locomo import load_samples, to_conversation
-from magma.config import DEFAULT
-from magma.embed import InstructedEmbedder
+from magma.config import DEFAULT, Ablation
+from magma.embed import Embedder, InstructedEmbedder
 from magma.json_types import JSONObject, JSONValue
 from magma.llm import ClientSettings, LLMClient, Usage
 from magma.memory import MagmaMemory, MemorySystem
-from magma.router import build_default_classifier
-from magma.temporal import DateparserTagger
+from magma.router import IntentClassifier, build_default_classifier
+from magma.retrieve import TokenCounter
+from magma.temporal import DateparserTagger, TemporalTagger
+from narrative.memory import NarrativeMemory
 
 SAMPLE_QUESTIONS = 40
 PILOT_QUESTIONS = 20
@@ -67,6 +75,23 @@ PILOT_QUESTIONS = 20
 class RunMode(StrEnum):
     SAMPLE = "SAMPLE"
     REPORT = "REPORT"
+
+
+class System(StrEnum):
+    """The memory under test."""
+
+    MAGMA = "MAGMA"
+    NARRATIVE = "NARRATIVE"
+    FULL_CONTEXT = "FULL_CONTEXT"
+    FULL_CONTEXT_VISIBLE = "FULL_CONTEXT_VISIBLE"
+
+    @property
+    def takes_ablation(self) -> bool:
+        return self in (System.MAGMA, System.NARRATIVE)
+
+    @property
+    def run_prefix(self) -> str:
+        return self.value.lower().replace("_", "-")
 
 
 @dataclass(frozen=True)
@@ -405,6 +430,28 @@ def _mean(values: Sequence[float]) -> float | None:
     return round(float(np.mean(np.array(values, dtype=np.float64))), 4)
 
 
+def create_memory(
+    system: System,
+    ablation: Ablation | None,
+    llm: LLMClient,
+    embedder: Embedder,
+    tokens: TokenCounter,
+    tagger: TemporalTagger,
+    classifier: IntentClassifier,
+) -> MemorySystem:
+    """An empty memory of the system under test; an ablation changes only the query-time config."""
+    config = DEFAULT.with_ablation(ablation)
+    match system:
+        case System.MAGMA:
+            return MagmaMemory.create(llm, embedder, tagger, tokens, config, classifier)
+        case System.NARRATIVE:
+            return NarrativeMemory.create(llm, embedder, tagger, tokens, config, classifier)
+        case System.FULL_CONTEXT:
+            return FullContextMemory.create(llm, embedder, tagger, tokens, config, classifier)
+        case System.FULL_CONTEXT_VISIBLE:
+            return FullContextMemory.create(llm, embedder, tagger, tokens, config, classifier, visible_only=True)
+
+
 def smallest_conversation(conversations: Sequence[Conversation]) -> Conversation:
     return min(conversations, key=lambda conversation: (len(conversation.turns), conversation.id))
 
@@ -419,6 +466,8 @@ def run_settings(
         "git_commit": _git(["rev-parse", "HEAD"]),
         "git_dirty": bool(_git(["status", "--porcelain"])),
         "mode": RunMode(arguments.mode.upper()).value,
+        "system": System(arguments.system.upper()).value,
+        "ablation": arguments.ablation.upper() if arguments.ablation else None,
         "seed": arguments.seed,
         "build_only": arguments.build_only,
         "question_ids": [question.id for question in questions],
@@ -468,6 +517,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--locomo", type=Path, required=True, help="path to locomo10.json")
     parser.add_argument("--mode", choices=["sample", "report"], default="sample")
+    parser.add_argument("--system", choices=[system.value.lower() for system in System], default="magma")
+    parser.add_argument("--ablation", choices=[ablation.value.lower() for ablation in Ablation], default=None,
+                        help="graph memories only: remove one component (Tabs. 4 and 5)")
     parser.add_argument("--conversations", nargs="+", default=None, help="sample ids; default: the smallest (sample) or all (report)")
     parser.add_argument("--questions", type=int, default=None, help=f"stratified sample size; default: {SAMPLE_QUESTIONS} (sample) or all (report)")
     parser.add_argument("--categories", nargs="+", default=None, help="only these categories, e.g. TEMPORAL SINGLE_HOP")
@@ -482,6 +534,10 @@ def main() -> None:
     arguments = parser.parse_args()
 
     mode = RunMode(arguments.mode.upper())
+    system = System(arguments.system.upper())
+    ablation = Ablation(arguments.ablation.upper()) if arguments.ablation else None
+    if ablation is not None and not system.takes_ablation:
+        parser.error(f"--ablation applies to the graph memories, not to {system.value.lower()}")
     if mode is RunMode.REPORT and arguments.max_cost_usd is None:
         parser.error("report mode needs --max-cost-usd")
     if arguments.max_cost_usd is not None and (arguments.llm_prices is None or (arguments.judge_prices is None and not arguments.build_only)):
@@ -499,7 +555,8 @@ def main() -> None:
     count = arguments.questions if arguments.questions is not None else (SAMPLE_QUESTIONS if mode is RunMode.SAMPLE else None)
     questions = [] if arguments.build_only else select_questions(conversations, count, arguments.seed, arguments.categories)
 
-    run_id = arguments.run_id or f"magma-{mode.value.lower()}-{'build' if arguments.build_only else 'qa'}-seed{arguments.seed}"
+    suffix = f"-{ablation.value.lower().replace('_', '-')}" if ablation else ""
+    run_id = arguments.run_id or f"{system.run_prefix}{suffix}-{mode.value.lower()}-{'build' if arguments.build_only else 'qa'}-seed{arguments.seed}"
     output = RunOutput(arguments.results_dir / run_id)
     for log_name in ("llm_calls.jsonl", "judge_calls.jsonl"):
         (output.directory / log_name).unlink(missing_ok=True)
@@ -519,7 +576,7 @@ def main() -> None:
     classifier = build_default_classifier(tagger)
 
     def new_memory() -> MemorySystem:
-        return MagmaMemory.create(llm, embedder, tagger, embedder, classifier=classifier)
+        return create_memory(system, ablation, llm, embedder, embedder, tagger, classifier)
 
     summary = run_benchmark(
         conversations, questions, new_memory, judge, meter, output, run_id, mode, arguments.build_only, arguments.pilot_questions

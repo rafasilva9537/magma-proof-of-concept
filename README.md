@@ -84,6 +84,12 @@ python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json --mode re
 
 Chamadas já feitas saem do cache, sem custo; rodar o mesmo comando de novo refaz o run de graça.
 
+O sistema testado é escolhido por `--system` (`magma`, o padrão; `narrative`; `full_context`; `full_context_visible`), e `--ablation` tira um componente de uma memória de grafo (ex.: `--ablation no_causal`, Tabs. 4 e 5 do artigo). As perguntas e o juiz são os mesmos; uma ablação reaproveita do cache a construção do grafo:
+
+```bash
+python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json --system full_context --mode report --questions 500 --max-cost-usd 3 --llm-prices <entrada> <saída> --judge-prices <entrada> <saída>
+```
+
 ## Verificação
 
 ```bash
