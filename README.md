@@ -7,7 +7,26 @@ Reimplementação do MAGMA (*Multi-Graph based Agentic Memory Architecture*, Jia
 
 ## Requisitos
 - Python 3.12 (o `faiss-cpu` ainda não publica versão para Python mais novo)
-- ~4 GB livres para os modelos locais (embedding e classificador de intenção)
+- ~4 GB livres em disco para os modelos locais (embedding e classificador de intenção)
+- ~5 GB de RAM por processo do runner (os dois modelos ficam carregados); vários runs em paralelo somam
+
+## Dados
+
+Nenhum conjunto de dados é versionado neste repositório. Cada um vem da fonte abaixo, e o caminho é passado ao runner por argumento.
+
+| Conjunto | Uso | Fonte | Onde fica |
+|---|---|---|---|
+| LoCoMo (`locomo10.json`, 10 conversas, 1.986 perguntas) | Retenção e comparação com o artigo do MAGMA | Cópia incluída no repositório oficial do MAGMA, [`FredJiang0324/MAGMA`](https://github.com/FredJiang0324/MAGMA), em `data/locomo10.json`; o conjunto original é o do [LoCoMo](https://github.com/snap-research/locomo) (Maharana et al., 2024). SHA-256 da cópia usada: `553cd5a15e25f2ceccc6ed185221eba645080c93e5b91087560a91aa5961f365` | `MAGMA-original-repo/data/locomo10.json` (clone do repositório oficial, só leitura) |
+| FANToM (`fantom_v1.json`, 870 conjuntos de perguntas em 253 conversas) | Visibilidade por personagem | Arquivo oficial dos autores, baixado pelo carregador do repositório [`skywalker023/fantom`](https://github.com/skywalker023/fantom): `fantom.tar.gz` (1,04 MB) em `storage.googleapis.com/ai2-mosaic-public/projects/fantom/`. Licença MIT; os autores restringem o uso dos dados à avaliação. As cópias no Hugging Face são de terceiros e não são usadas | `data/fantom/fantom_v1.json` (ignorado pelo git) |
+
+Para obter os dois:
+
+```bash
+git clone https://github.com/FredJiang0324/MAGMA.git MAGMA-original-repo
+python -m bench.fantom download
+```
+
+O segundo comando baixa o `fantom.tar.gz`, confere o SHA-256 publicado no carregador dos autores (`1d08dfa0ea474c7f83b9bc7e3a7b466eab25194043489dd618b4c5223e1253a4`) e extrai o `fantom_v1.json` em `data/fantom/`.
 
 ## Instalação
 
@@ -88,6 +107,20 @@ O sistema testado é escolhido por `--system` (`magma`, o padrão; `narrative`; 
 
 ```bash
 python -m bench.runner --locomo MAGMA-original-repo/data/locomo10.json --system full_context --mode report --questions 500 --max-cost-usd 3 --llm-prices <entrada> <saída> --judge-prices <entrada> <saída>
+```
+
+## Benchmark (FANToM)
+
+Cada conversa do FANToM é construída inteira e recebe as perguntas fechadas dos seus conjuntos (crença em múltipla escolha, listas e sim/não de quem sabe cada informação), com a correção oficial, sem juiz. A presença de cada personagem em cada fala é derivada das saídas e voltas; para conferi-la contra as listas oficiais de quem sabe (sem chamar o LLM):
+
+```bash
+python -m bench.fantom presence
+```
+
+Amostra de 30 conversas inteiras (seed 7), na Arquitetura B; `--system` aceita os mesmos valores do runner do LoCoMo, e `--conversations 0` usa todas:
+
+```bash
+python -m bench.fantom run --system narrative --conversations 30 --max-cost-usd 1 --llm-prices <entrada> <saída>
 ```
 
 ## Verificação
