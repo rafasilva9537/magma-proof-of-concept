@@ -123,6 +123,20 @@ Amostra de 30 conversas inteiras (seed 7), na Arquitetura B; `--system` aceita o
 python -m bench.fantom run --system narrative --conversations 30 --max-cost-usd 1 --llm-prices <entrada> <saída>
 ```
 
+## Figuras
+
+Os gráficos dos resultados saem dos `summary.json` dos runs terminados (A × C1 por categoria do LoCoMo, tokens por pergunta e ablações da A), em SVG, PDF e PNG (300 dpi), na pasta `runs/figures/`; o `figures.json` lista os runs de onde vem cada figura:
+
+```bash
+python -m bench.figures
+```
+
+Os diagramas das arquiteturas ficam em `docs/figures/` como `.drawio.svg`: abrem como imagem comum e são editáveis no [draw.io](https://www.drawio.com/) (desktop ou navegador), que salva no mesmo arquivo. Para exportar em PNG com o draw.io desktop:
+
+```bash
+draw.io --export --format png --scale 2 --border 20 --output runs/figures/arquitetura_a.png docs/figures/arquitetura_a.drawio.svg
+```
+
 ## Verificação
 
 ```bash
