@@ -141,7 +141,7 @@ Referência: Jiang, D.; Li, Y.; Li, G.; Li, B. *MAGMA: A Multi-Graph based Agent
 - Grupo controle × grupo experimental; tratamento estatístico dos resultados.
 - Justificar cada ferramenta escolhida e as alternativas descartadas.
 
-**Base teórica:** MAGMA (Jiang et al., 2026); AdaMARP (Xu et al., 2026) — ação física × fala; DEBATE (Chuang et al., 2025) — consistência de opinião em role-play; ToMAgent (Zhou et al., 2024) — quem sabe o quê; *Memory is Reconstructed, Not Retrieved* (Ji et al., 2026) — grafo vs texto linear em custo.
+**Base teórica:** MAGMA (Jiang et al., 2026); AdaMARP (Xu et al., 2026) — ação física × fala; DEBATE (Chuang et al., 2025) — consistência de opinião em role-play; ToMAgent (Hwang et al., 2026) — quem sabe o quê; *Memory is Reconstructed, Not Retrieved* (Ji et al., 2026) — grafo vs texto linear em custo.
 
 ---
 
@@ -952,6 +952,7 @@ Correspondência com o plano anterior (42 commits): 11 → 11; 18 + 19 + 20 + 22
 - ExploreToM — https://arxiv.org/abs/2412.12175 · HF: https://huggingface.co/datasets/facebook/ExploreToM
 - OpenToM — https://arxiv.org/abs/2402.06044v3
 - Hi-ToM — https://huggingface.co/umwyf/Hi-ToM_Dataset
+- ToMAgent — Hwang et al., 2026, *Infusing Theory of Mind into Socially Intelligent LLM Agents* (Findings of ACL 2026) — https://aclanthology.org/2026.findings-acl.551/ · avaliado no Sotopia (Zhou et al., 2024)
 - Dense X Retrieval (Chen et al., 2024) — granularidade de recuperação (proposições × passagens)
 - LoCoMo — Maharana et al., 2024, *Evaluating Very Long-Term Conversational Memory of LLM Agents* (ACL 2024)
 - LongMemEval — Wu et al., *LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory* (ICLR 2025)
