@@ -14,7 +14,8 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generic, Literal, NotRequired, Protocol, TypedDict, TypeVar
@@ -244,6 +245,12 @@ def count_tokens(messages: list[Message]) -> int:
     return sum(len(_ENCODING.encode(m["content"])) + per_message_overhead for m in messages)
 
 
+class _RetryAttempt(threading.local):
+    """The retry attempt of the calling thread: a retry never moves the seed of another thread's calls."""
+
+    offset: int = 0
+
+
 class LLMClient:
     def __init__(
         self,
@@ -262,10 +269,24 @@ class LLMClient:
         self._sleep = sleep
         self.usage: dict[str, Usage] = {}
         self._lock = threading.Lock()
+        self._attempt = _RetryAttempt()
 
     @staticmethod
     def from_env(prefix: str = "LLM", log_path: Path | None = None) -> LLMClient:
         return LLMClient(ClientSettings.from_env(prefix), log_path=log_path)
+
+    @contextmanager
+    def retry_attempt(self, attempt: int) -> Iterator[None]:
+        """Calls inside are sent with the seed moved by `attempt`, so a retry gets a new sample and a new cache key.
+
+        Attempt 0 is the normal request, byte for byte: the calls outside any retry keep their cache entries.
+        """
+        previous = self._attempt.offset
+        self._attempt.offset = attempt
+        try:
+            yield
+        finally:
+            self._attempt.offset = previous
 
     def chat(self, messages: list[Message], tag: str = "default", max_tokens: int | None = None) -> LLMResult:
         request = self._build_request(messages, max_tokens, json_output=False)
@@ -301,7 +322,7 @@ class LLMClient:
             "model": self.settings.model,
             "messages": messages,
             "temperature": self.config.temperature,
-            "seed": self.config.seed,
+            "seed": self.config.seed + self._attempt.offset,
             "max_tokens": output_budget,
         }
         if json_output:

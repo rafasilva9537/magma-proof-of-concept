@@ -12,6 +12,13 @@ answers the closed-form questions, scored as in the authors' `eval_fantom.py`:
 - answerability and info-accessibility yes/no: weighted F1 over yes and no.
 
 The set scores are the paper's "All" (every closed question of the set right).
+
+An answer out of the expected form (a yes/no that does not start with yes, no,
+true or false; a choice that does not start with an option letter; a list that
+names no character of the conversation, or says "Information not found") is
+asked once more, with the seed moved so the call is new, in every system alike.
+The second answer is scored as it comes; the record keeps both, and the summary
+counts the retries.
 Free-response belief and fact questions are not asked: they need a similarity
 model or token F1, and the closed questions already cover the same sets.
 
@@ -138,6 +145,7 @@ class FantomConversation:
     conversation: Conversation  # the turns, with derived presence, for build_memory
     questions: tuple[FantomQuestion, ...]
     sets: tuple[FantomSet, ...]
+    characters: frozenset[str]  # everyone who speaks, for the form check of the list answers
 
 
 @dataclass(frozen=True)
@@ -268,7 +276,9 @@ def to_conversation(sets: Sequence[FantomSet], seed: int) -> FantomConversation:
         turns.append(Turn(head, text, START + timedelta(minutes=number), present[number] or frozenset({head})))
     questions = tuple(question for fantom_set in sets for question in set_questions(fantom_set, conversation_id, seed))
     reference_time = START + timedelta(minutes=len(lines))
-    return FantomConversation(conversation_id, Conversation(conversation_id, tuple(turns), reference_time, ()), questions, tuple(sets))
+    characters = frozenset(name for line in lines for name in speakers_of(line))
+    conversation = Conversation(conversation_id, tuple(turns), reference_time, ())
+    return FantomConversation(conversation_id, conversation, questions, tuple(sets), characters)
 
 
 def set_questions(fantom_set: FantomSet, conversation_id: str, seed: int) -> list[FantomQuestion]:
@@ -319,6 +329,23 @@ def belief_choice_prompt(qa: FantomQA, rng: random.Random) -> tuple[str, str]:
 def asked_about(question: str) -> str | None:
     found = _ASKED_ABOUT.match(question)
     return found.group(1) if found else None
+
+
+# ---------------------------------------------------------------- form check (before scoring)
+
+_CHOICE_STARTS = ("(a)", "(b)", "a)", "b)", "a.", "b.", "a:", "b:", "a,", "b,")
+
+
+def is_well_formed(question: FantomQuestion, answer: str, characters: frozenset[str]) -> bool:
+    """Whether the answer has the form its question asks for: a fixed rule, the same for every system."""
+    text = answer.strip().lstrip("\"'*").lower()
+    match question.kind:
+        case QuestionKind.BELIEF_CHOICE:
+            return text in ("a", "b") or text.startswith(_CHOICE_STARTS)
+        case QuestionKind.ANSWERABILITY_BINARY | QuestionKind.INFO_ACCESSIBILITY_BINARY:
+            return text.startswith(("yes", "no", "true", "false"))
+        case QuestionKind.ANSWERABILITY_LIST | QuestionKind.INFO_ACCESSIBILITY_LIST:
+            return not text.startswith("information not found") and any(name.lower() in text for name in characters)
 
 
 # ---------------------------------------------------------------- scoring (as in eval_fantom.py)
@@ -382,7 +409,8 @@ class FantomAnswer:
     viewer: str | None
     prompt: str
     expected: tuple[str, ...]
-    answer: str
+    answer: str  # the scored answer: the retry's, when there was one
+    first_answer: str | None  # the answer out of form that was asked again; None when the first was in form
     correct: bool
     latency_s: float
     usage: Usage
@@ -392,7 +420,13 @@ class FantomAnswer:
 
 def summarize_answers(answers: Sequence[FantomAnswer]) -> JSONObject:
     """Per question type and accessibility: accuracy (lists, choice) or weighted F1 (binary); and the set-level All."""
-    report: JSONObject = {"questions": len(answers)}
+    retried = [answer for answer in answers if answer.first_answer is not None]
+    retries: JSONObject = {kind.value.lower(): sum(1 for answer in retried if answer.kind is kind) for kind in QuestionKind}
+    report: JSONObject = {
+        "questions": len(answers),
+        "retried": len(retried),  # answers out of form, asked once more
+        "retried_by_kind": retries,
+    }
     for accessibility in Accessibility:
         part = [answer for answer in answers if answer.accessibility is accessibility]
         scores: JSONObject = {"questions": len(part)}
@@ -435,8 +469,22 @@ def choose_conversations(conversations: Sequence[FantomConversation], count: int
     return [conversation for conversation in conversations if conversation.id in chosen]
 
 
-def ask(memory: MemorySystem, conversation: FantomConversation, question: FantomQuestion, meter: CostMeter) -> FantomAnswer:
-    reply = memory.query(question.prompt, conversation.conversation.reference_time, viewer=question.viewer)
+def ask(
+    memory: MemorySystem, llm: LLMClient, conversation: FantomConversation, question: FantomQuestion, meter: CostMeter
+) -> FantomAnswer:
+    """Ask once; an answer out of form is asked once more with a new seed, and the second answer is scored."""
+    now = conversation.conversation.reference_time
+    reply = memory.query(question.prompt, now, viewer=question.viewer)
+    first_answer: str | None = None
+    usage = Usage()
+    usage.merge(reply.usage)
+    latency_s = reply.latency_s
+    if not is_well_formed(question, reply.answer, conversation.characters):
+        first_answer = reply.answer
+        with llm.retry_attempt(1):
+            reply = memory.query(question.prompt, now, viewer=question.viewer)
+        usage.merge(reply.usage)
+        latency_s += reply.latency_s
     return FantomAnswer(
         question_id=question.id,
         conversation_id=question.conversation_id,
@@ -447,10 +495,11 @@ def ask(memory: MemorySystem, conversation: FantomConversation, question: Fantom
         prompt=question.prompt,
         expected=question.correct,
         answer=reply.answer,
+        first_answer=first_answer,
         correct=is_correct(question, reply.answer),
-        latency_s=round(reply.latency_s, 3),
-        usage=reply.usage,
-        cost_usd=meter.charge_question(reply.usage, Usage()),
+        latency_s=round(latency_s, 3),
+        usage=usage,
+        cost_usd=meter.charge_question(usage, Usage()),
         trace=reply.trace,
     )
 
@@ -511,7 +560,7 @@ def run(arguments: argparse.Namespace) -> int:
                 _append(directory / "builds.jsonl", build)
                 meter.check()
                 for question in conversation.questions:
-                    answer = ask(memory, conversation, question, meter)
+                    answer = ask(memory, llm, conversation, question, meter)
                     answers.append(answer)
                     _append(directory / "answers.jsonl", json.loads(json.dumps(asdict(answer))))
                     meter.check()

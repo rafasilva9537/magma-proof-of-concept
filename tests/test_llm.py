@@ -213,3 +213,14 @@ def test_reply_cut_by_the_token_limit_stops_at_once(tmp_path: Path) -> None:
     with pytest.raises(ReplyCutByTokenLimit):
         llm.chat(MSG)
     assert (len(backend.requests), waits) == (1, [])
+
+
+def test_a_retry_attempt_moves_the_seed_and_gets_its_own_cache_entry(tmp_path: Path) -> None:
+    llm, backend = make_client(tmp_path, ["broken", "fixed"])
+    first = llm.chat(MSG)
+    with llm.retry_attempt(1):
+        retried = llm.chat(MSG)
+    again = llm.chat(MSG)  # outside the retry: the original request, served from the cache
+    assert (first.text, retried.text, again.text) == ("broken", "fixed", "broken")
+    assert [request["seed"] for request in backend.requests] == [DEFAULT.llm.seed, DEFAULT.llm.seed + 1]
+    assert again.cached

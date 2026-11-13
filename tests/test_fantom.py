@@ -13,6 +13,7 @@ import pytest
 
 import bench.fantom as fantom
 from baselines.full_context import FullContextMemory
+from bench.runner import CostMeter
 from bench.fantom import (
     Accessibility,
     FantomAnswer,
@@ -26,6 +27,7 @@ from bench.fantom import (
     choose_conversations,
     extract_dataset,
     is_correct,
+    is_well_formed,
     list_is_correct,
     presence,
     presence_agreement,
@@ -157,7 +159,7 @@ def test_weighted_f1_by_hand() -> None:
 
 
 def answer(set_id: str, kind: QuestionKind, accessibility: Accessibility, correct: bool, expected: str = "yes", given: str = "yes") -> FantomAnswer:
-    return FantomAnswer("q", "c", set_id, kind, accessibility, None, "p", (expected,), given, correct, 0.0, Usage(), None, {})
+    return FantomAnswer("q", "c", set_id, kind, accessibility, None, "p", (expected,), given, None, correct, 0.0, Usage(), None, {})
 
 
 def test_set_all_needs_every_closed_question_right() -> None:
@@ -237,3 +239,48 @@ def test_the_character_does_not_see_what_was_said_while_away() -> None:
     reply = memory.query(caio.prompt, conversation.conversation.reference_time, viewer=caio.viewer)
     assert reply.trace["included"] == ["e1", "e2", "e3", "e7", "e8", "e9"]  # lines 3-5 happened while he was away
     assert is_correct(caio, reply.answer)
+
+
+def test_the_form_check_is_fixed_per_question_type() -> None:
+    questions = {question.kind: question for question in set_questions(fantom_set(), "fantom-0", seed=7)}
+    characters = frozenset({"Ana", "Bia", "Caio", "Dan"})
+    binary = questions[QuestionKind.INFO_ACCESSIBILITY_BINARY]
+    assert is_well_formed(binary, "No.", characters) and is_well_formed(binary, "yes, he does", characters)
+    assert not is_well_formed(binary, "Information not found shutting down. No further strings needed.", characters)
+    choice = questions[QuestionKind.BELIEF_CHOICE]
+    assert is_well_formed(choice, "(b) Caio does not know", characters) and is_well_formed(choice, "a", characters)
+    assert not is_well_formed(choice, "Information not found", characters)
+    listing = questions[QuestionKind.INFO_ACCESSIBILITY_LIST]
+    assert is_well_formed(listing, "Ana and Bia", characters)
+    assert not is_well_formed(listing, "Information not found", characters)
+    assert not is_well_formed(listing, "Goodbye", characters)
+
+
+class DegenerateOnceBackend:
+    """Answers out of form for the first seed and in form for the next one."""
+
+    def __init__(self) -> None:
+        self.seeds: list[int] = []
+
+    def complete(self, request: ChatRequest) -> Completion:
+        self.seeds.append(request["seed"])
+        text = "Information not found shutting down. No further strings." if len(self.seeds) == 1 else "Yes."
+        return Completion(text=text, prompt_tokens=10, completion_tokens=2, reasoning_tokens=0)
+
+
+def test_an_answer_out_of_form_is_asked_once_more_and_the_retry_is_scored() -> None:
+    conversation = to_conversation([fantom_set()], seed=7)
+    backend = DegenerateOnceBackend()
+    llm = LLMClient(ClientSettings(model="test-model"), backend=backend, cache_dir=None)
+    embedder = SameVectorEmbedder()
+    memory = FullContextMemory.create(llm, embedder, DateparserTagger(), embedder, classifier=KeywordClassifier())
+    for turn in conversation.conversation.turns:
+        memory.add_turn(turn)
+    bia = next(q for q in conversation.questions if q.kind is QuestionKind.INFO_ACCESSIBILITY_BINARY and q.viewer == "Bia")
+    meter = CostMeter(None, None, None)
+    result = fantom.ask(memory, llm, conversation, bia, meter)
+    assert backend.seeds[1] == backend.seeds[0] + 1
+    assert result.first_answer is not None and result.first_answer.startswith("Information not found")
+    assert result.answer == "Yes." and result.correct  # Bia heard it
+    assert result.usage.calls == 2
+    assert summarize_answers([result])["retried"] == 1
